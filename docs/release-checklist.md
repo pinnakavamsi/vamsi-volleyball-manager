@@ -88,4 +88,4 @@ The [local browser review](browser-review.md) records Chrome 154/macOS observati
 - [ ] Run target-host load baseline, document bottlenecks/error rates/data volumes and any unachieved latency/mobile targets. No contract capacity/uptime claim without measured evidence.
 - [ ] Confirm event formats/ranking/forfeit/cross-pool formulas, approval policy, QR admission lifetime, backup retention/recovery targets and support/retention/deletion policy with the owner.
 
-Scheduled report distribution, custom builders, player/team accounts, payments, native clients, additional formats, enterprise SSO and multiregion failover remain deferred as specified. No live account has been connected or public production deployment authorized by this build request.
+Scheduled report distribution, custom builders, player/team accounts, payments, native clients, additional formats, enterprise SSO and multiregion failover remain deferred as specified. The owner separately authorized the demo VM deployment at `https://volleyball.example.com`; its [server setup record](server-setup.md) documents actual infrastructure and outstanding configuration. Production acceptance gates remain open.

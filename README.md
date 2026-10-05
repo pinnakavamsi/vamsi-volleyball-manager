@@ -98,6 +98,7 @@ Once the VM and GitHub Actions SSH secrets are configured and repository variabl
 - [Weather adapter, licensing, cache and actual event-date horizon](docs/weather-adapter.md)
 - [Operations, encrypted backups, continuous WAL/PITR, restore, migrations and incidents](docs/operations-runbook.md)
 - [Caddy, Docker, private PostgreSQL and automatic GitHub deployment](docs/deployment.md)
+- [Deployed demo server setup record](docs/server-setup.md)
 - [Requirement traceability and real-device/release checklist](docs/release-checklist.md)
 - [Local browser workflow evidence](docs/browser-review.md)
 - [Report PDF visual evidence](docs/report-pdf-review.md)
