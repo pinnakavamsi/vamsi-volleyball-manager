@@ -1,0 +1,21 @@
+{
+  "downloaded_at": "2026-10-05",
+  "upstream": "Noto project",
+  "files": {
+    "NotoSans-Regular.ttf": {
+      "source": "https://raw.githubusercontent.com/notofonts/notofonts.github.io/main/fonts/NotoSans/hinted/ttf/NotoSans-Regular.ttf",
+      "sha256": "478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823",
+      "bytes": 621572
+    },
+    "NotoSans-Bold.ttf": {
+      "source": "https://raw.githubusercontent.com/notofonts/notofonts.github.io/main/fonts/NotoSans/hinted/ttf/NotoSans-Bold.ttf",
+      "sha256": "1df075a380fc7cb898acf64c1f7b3b4dd780de3caa860178bf929de35817a913",
+      "bytes": 631484
+    },
+    "OFL.txt": {
+      "source": "https://raw.githubusercontent.com/notofonts/latin-greek-cyrillic/main/OFL.txt",
+      "sha256": "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a",
+      "bytes": 4396
+    }
+  }
+}

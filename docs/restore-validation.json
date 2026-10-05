@@ -1,0 +1,19 @@
+{
+  "validated_at": "2026-10-05T18:04:33.820286+00:00",
+  "environment": "isolated local macOS PostgreSQL18",
+  "status": "passed",
+  "encrypted_physical_base": true,
+  "separate_backup_role": true,
+  "continuous_wal_replayed": true,
+  "score_committed_after_base_survived": true,
+  "score_version": 7,
+  "organizations_preserved": 2,
+  "memberships_preserved": 2,
+  "court_occupancy_preserved": true,
+  "file_integrity_verified": true,
+  "runtime_rls_verified": true,
+  "isolated_restore_seconds": 1.795,
+  "total_drill_seconds": 17.502,
+  "production_rpo_rto_measured": false,
+  "source_archiving_after_drill": "disabled; enable independent recovery storage before production"
+}

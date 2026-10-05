@@ -1,0 +1,690 @@
+# Volleyball Platform V1 Requirements for Codex
+
+Version 1.0 | Prepared October 5 2026 | Product owner Vamsi Pinnaka
+
+Build a professional volleyball tournament and league platform using PostgreSQL. This specification defines the complete V1 product, its operating requirements, its data model, and the acceptance criteria Codex must satisfy. Deliver a working application with migrations, meaningful tests, documentation, and an operational runbook.
+
+V1 is optimized for mobile browsers. Organizers are the only account holders. Teams, players, and spectators view public tournaments without login. Referees receive delegated access to individual games through private QR codes. Team and player accounts are future releases.
+
+The exact application credit is: Designed and developed by Vamsi Pinnaka
+
+## 1 Implementation contract
+
+- Treat MUST requirements and acceptance scenarios as release requirements. Distinguish finished features from prototypes and unavailable external integrations.
+- PostgreSQL is mandatory for shared application data. Browser storage may support temporary queues and preferences; it must not become the central match database.
+- Inspect an existing repository and preserve its conventions if one is supplied. This specification does not authorize production deployment, public publishing, or connecting to live accounts.
+- The backend, frontend, hosting provider, and weather provider have not been selected by the owner. Implementation defaults below are proposed choices, not previously approved technology decisions.
+- Recommended default for a new repository: Python Flask with an application factory, SQLAlchemy, Alembic migrations, and a modular responsive HTML/CSS/JavaScript interface. Expose a versioned JSON API so future iOS and Android applications can use the same backend. An existing appropriate stack may be retained.
+- Use supported stable dependency versions at implementation time; pin them and document the runtime requirements. Keep business rules in backend services rather than in page templates or browser-only calculations.
+- Ship a cohesive interface across all modules. Avoid unfinished placeholders, fake success messages, fabricated weather, and charts backed by invented production data.
+- Keep setup defaults editable and visible. Record overrides and consequential changes in audit history. Do not silently invent a tournament's official ranking policy.
+- Demo data must be explicitly identified and isolated from production data. Deliver at least two organizations to demonstrate isolation, one multi-division tournament, and one months-long league.
+
+## 2 Scope and implementation defaults
+
+The owner has selected organizer-only V1 accounts, mobile web, PostgreSQL, public/private tournament visibility, venue weather, dynamic court assignment, per-game QR access, a 10-second QR display, game recovery, screen-awake behavior, reporting, exports, backups, and the application credit.
+
+Use the following editable defaults when a new installation needs initial values. These defaults give Codex a buildable starting point and do not claim that one universal volleyball rule applies to every organization.
+
+| Decision | Proposed V1 default |
+| --- | --- |
+| Organization onboarding | Platform administrator creates organizations and invites their first administrators |
+| Tournament visibility | Private until an authorized organizer publishes it |
+| Supported competition formats | Round robin, pools followed by single elimination, single elimination, and recurring league fixtures |
+| Match template | Best of 3 sets, regular sets to 25, deciding set to 15, win by 2, no point cap |
+| Fixed set matches | Supported when explicitly selected; setup must define whether a drawn match is allowed |
+| Standings template | Match win 2 points, loss 0; draw 1 only where enabled; forfeits configured separately |
+| Tie break template | Standings points, match wins, two-team head-to-head, set quotient, point quotient; unresolved ties stay visible |
+| Result approval | Referee submits; organizer approves final results; organizations may enable automatic finalization of valid results |
+| QR admission window | 15 minutes per access grant; independent of its 10-second display and the active scorer session |
+| Scorer handover | Explicit Resume and take scoring control; atomically revoke the previous scorer's ability to write |
+| Weather display | At most 7 available tournament-day forecasts; venue local timezone |
+| Saved preferences | Separate private organizer layouts and public display configuration |
+| Report delivery | Filtered downloads and saved views in V1; scheduled delivery and custom report builders later |
+| Recovery objectives | Proposed production target: disaster recovery data loss at most 5 minutes and restoration within 60 minutes |
+| Backup retention | Proposed production default: 30 days, encrypted and separate from the primary database |
+
+Configuration must clearly distinguish the lead required to win a set from point difference or point quotient used to rank teams. The phrase win by point must not be treated as one field for both purposes.
+
+## 3 Actors and permissions
+
+One global organizer identity may belong to multiple organizations. Membership, permissions, and suspension are independent in each organization. Adding an existing user to another organization must not remove or alter other memberships.
+
+| Actor | Access and responsibility |
+| --- | --- |
+| Platform administrator | Provision organizations and initial administrators; manage platform settings, service health, and audited support actions |
+| Organization administrator | Manage organization branding, organizer memberships, roles, tournament access, and all organization operations |
+| Tournament manager | Manage assigned tournaments, rules, teams, schedules, courts, publication, referee access, and results |
+| Scheduler | Manage venues, courts, schedules, reservations, and operational assignments within the granted scope |
+| Results manager | Review, approve, correct, and export match results and standings within the granted scope |
+| Read only organizer | View private organization information and permitted reports; no changes |
+| Referee | Use one game's delegated scoring session; no organizer account required in V1 |
+| Public visitor | View the published tournament's approved public information; no login |
+
+- Implement permission checks in backend endpoints and live subscriptions, not just by hiding interface buttons.
+- Organization administrators can invite existing or new organizer identities. Invitation acceptance and membership activation must be recorded.
+- Support tournament-specific staff assignments where an organization does not want every organizer to edit every event.
+- A user who loses one organization's membership keeps their global identity and other memberships. Removing membership must not erase audit history.
+- Platform administration is a separate permission scope. Do not silently give every platform support user access to all private tournament data.
+- Public readers and referees must never inherit organizer permissions.
+- Provide login, logout, password reset, invitation acceptance, profile settings, and session management. Use a verified identity library or established authentication provider; do not build bespoke password cryptography.
+- Provide MFA for administrators and allow an organization to require it. Bootstrap the first platform administrator through a documented secure setup command or invitation, without hardcoded credentials.
+
+## 4 Organizations and team records
+
+- Store organization name, logo, contact information, default timezone, branding, active status, and configuration.
+- Provide an organization switcher that clearly shows the current organization. Navigation and data queries must follow that scope.
+- Organization users can create multiple concurrent or historical tournaments and leagues.
+- Organizers create and manage team records with team name, abbreviation, logo/color, optional contact details, and active/archive status.
+- Separate a team's reusable identity from its entry in a particular tournament, division, or season. Store the entry's display name, seed, participation status, and relevant snapshot information.
+- Permit the same reusable team to enter different events. Do not silently share private team/contact records across organizations.
+- An organizer may record a roster as event-specific information, but V1 must not create player accounts, player approval portals, eligibility engines, or self-service roster workflows.
+- Public team information should be limited to display fields. Private contacts and roster details stay private by default.
+- Preserve historical team names and event participation when teams are renamed or archived. Future team/player account support must not rewrite historical results.
+
+## 5 Tournament and league setup
+
+Provide a guided setup flow with draft saving and a review screen before publication.
+
+Required setup fields include:
+
+- Name, description, organization, competition type, and publication status.
+- Start/end dates, IANA timezone, venue address, map coordinates, and indoor/outdoor indication.
+- One or more venues where applicable; courts belong to venues and have names and availability.
+- Divisions such as skill level, age group, gender/category, or custom organizer-defined labels.
+- Teams and tournament entries per division, capacity where relevant, seeds, and pool assignment.
+- Competition format and stage structure, qualification rules, classification/consolation matches where configured.
+- Default match duration, scheduling buffers, breaks, rest constraints, and referee availability or assignments.
+- Scoring, standing-point, tie-break, forfeit, and result-approval policies.
+- Public/private visibility, public page content choices, dashboard layout, logos, and announcements.
+
+Support short events, multi-day events, and leagues extending over months. A league has rounds or fixture dates, persistent season standings, optional playoffs, and an archive after completion.
+
+Supported V1 formats must be functional end to end:
+
+- Round robin, including configurable repeated encounters.
+- Pool play followed by single-elimination playoffs.
+- Single elimination with byes and seeded or qualifying placeholders.
+- League fixtures with manual or generated rounds and optional knockout playoffs.
+
+Allow multiple formats within one tournament through its divisions and stages. Model future formats through an extensible format interface, but do not present unsupported double-elimination, Swiss, or rotating-partner formats as complete V1 features.
+
+Tournament states include draft, published, active, completed, and archived. Public visibility is a separate property: a published event may remain private. Archive must preserve results and history; published historical pages remain available only if the organizer keeps visibility public.
+
+Before activation, validate rule completeness, participant counts, stage references, qualification links, schedule conflicts, and timezone/date consistency. Show actionable errors rather than silently repairing competitive rules.
+
+## 6 Rules and rankings
+
+### 6.1 Match scoring rules
+
+- Support best-of-N sets and a fixed number of sets. Validate whether N and the winner policy make sense for the selected format.
+- Configure regular-set target points, deciding-set target, win-by margin, optional hard cap, sets needed to win, timeouts, and any timed-match policy supported in V1.
+- Explain hard-cap behavior explicitly; for example, a cap can award the set at the cap even without the normal win-by margin. The selected policy must be visible before play.
+- Rule precedence is tournament default, division override, stage override, then authorized match override.
+- Snapshot the effective rule version when the game starts. Later setting changes must not silently modify a running or historical game.
+- Automatically recognize a completed set using the snapshot, show the outcome, and require confirmation before starting the next set. Support an undo/correction workflow at set boundaries.
+- A match that reaches its winning condition must show End Game; do not silently end the game or release the court without the explicit action.
+- Provide a read-only rule summary on the referee screen and tournament page where the organizer enables it.
+
+### 6.2 Standing points and tie breaks
+
+- Configure points awarded for wins, losses, draws if allowed, forfeits, and optionally different set-score outcomes. Do not hardcode match win points as rally points.
+- Compute matches played/won/lost/drawn, sets won/lost, points scored/conceded, standings points, and configured tie-break metrics.
+- Let organizers choose ordered criteria: standings points, match wins or win percentage, head-to-head, set difference or quotient, point difference or quotient, and explicit playoff/manual resolution.
+- Configure whether head-to-head applies only to a two-team tie or to a tied-team mini-table, including whether criteria restart after splitting a tied group.
+- Define zero-denominator quotient behavior, excluded incomplete results, unequal games played, and cross-pool qualification comparisons. Show unresolved ties rather than sorting by team name as an undisclosed deciding rule.
+- By default, official standings use finalized results. Show live/provisional information separately and label it if included in a preview.
+- Publish a ranking explanation and the actual tie-break values. Manual resolution requires a reason and audit entry.
+- For knockout progression, require a winner or an explicit resolution before assigning the next participant.
+- Forfeits, abandoned games, and byes must have configurable standings/statistics treatment. Do not fabricate rally history for an administrative forfeit score.
+
+## 7 Schedules and dynamic court assignment
+
+- Provide mobile list/day views and larger-screen timeline/court views. Support manual fixture creation and reviewable automatic generation.
+- Check team overlap, referee overlap, rest time, court bookings, venue opening hours, buffers, breaks, and scheduling dependencies. Explain unresolved conflicts.
+- Organizers can schedule a game without assigning a court. Public and private views display Court to be assigned until an assignment is made.
+- Organizers assign courts before starting games, based on current availability. Support available, reserved, occupied, and unavailable operational states.
+- Occupancy must be derived from active assignments and reservations, rather than an editable flag that can drift from match state.
+- Starting or preparing a game reserves its assigned court atomically. Two organizers choosing the same available court concurrently must not both succeed.
+- A match requires an eligible court before Start Game. Reject start when the assignment is missing, unavailable, or conflicting.
+- Provide reservation expiry/release controls for games that never start. Do not automatically release a court occupied by an active or paused match.
+- Referee disconnection, QR hiding, or browser failure must not release the court.
+- End Game releases active court occupancy even if the result is awaiting approval. Organizer-controlled abandoned/cancelled outcomes also release occupancy through explicit audited actions.
+- Allow assignment changes before play. Moving an active game to another court requires an authorized organizer, atomic availability checks, confirmation, and a reason; preserve scores and timing.
+- Reflect assignment and schedule revisions on referee, organizer, public, and fullscreen views. Notify affected organizers and display public change notices where enabled.
+- Include scheduled, ready, in-progress, paused, ended, postponed, abandoned, and cancelled lifecycle states. Forfeit is an outcome; a bye is a scheduling/advancement decision.
+- Store planned times separately from actual start/end times. Games may run late without corrupting subsequent fixtures; organizers can revise the schedule.
+
+## 8 Organizer game preparation and QR display
+
+The normal flow is: open game, confirm participants and rules, assign available court, show QR, referee scans, referee starts play. QR recovery must remain available for an ongoing game.
+
+- The QR code is hidden by default every time the organizer opens the game screen.
+- A button labeled Show QR Code reveals only that game's referee access QR.
+- Display a countdown starting at 10 seconds. At zero, remove the QR from view and return to the hidden state.
+- Organizers may show the QR unlimited times; every reveal starts a fresh 10-second visibility interval.
+- Use an elapsed-time deadline, not a fragile decrement-only counter. Hide the QR immediately when the organizer page is backgrounded or navigated away, and never extend a stale reveal after returning.
+- Do not fetch or embed the raw credential in the hidden page DOM, a public response, analytics, screenshots generated by reports, or organizer list exports.
+- The 10-second display controls visibility only. It must not end a referee session, end a match, rotate an active session credential, or release a court.
+- Showing a QR may reuse a still-valid admission grant or issue a new grant if it has expired/revoked. Admission lifetime is independently configured; an admitted scoring session can continue through the game.
+- Use an unpredictable, high-entropy game-scoped grant. Store a hash of the secret; never encode an organizer password or administrator session in the QR.
+- Exchange the QR secret for a secure game-scoped session and remove it from browser address/history as soon as possible. Redact secrets from access logs and error monitoring. A URL-fragment exchange is an acceptable default.
+- QR admission is valid for ready or ongoing games, subject to organization status and revocation. Finalized games must not become editable because a stale code is scanned.
+- Organizers can revoke referee access, regenerate admission grants, inspect scorer connection status, and perform a handover.
+
+## 9 Referee mobile scoring interface
+
+The referee uses a mobile browser without creating a V1 account. The initial page loads the exact game, organization/tournament, division/stage, teams, assigned court, and effective scoring rules.
+
+### 9.1 Main screen
+
+- Two clearly distinguished team areas with names, optional logos/colors, large scores, and large +1 buttons.
+- Current set number, sets won, completed-set scores, match status, elapsed match time, and serving-team indicator.
+- Timeouts with remaining counts and an optional visible timeout timer.
+- Undo last action, controlled score correction, switch display sides, whistle, and End Game.
+- Switching visual sides must not switch team identities, stored scores, or results.
+- Start Game and Resume Game flows; clear confirmation before starting, ending, or taking over scoring control.
+- Saved, Pending, Offline, Reconnecting, or Conflict state displayed clearly. Do not show Saved until the backend confirms a durable write.
+- Compact screen-awake status; readiness checks for sound and connectivity.
+- Keep the main scoring actions visible without scrolling at common phone sizes. Place secondary history/rules behind a drawer or secondary view.
+- Require deliberate confirmation for destructive or consequential changes. Avoid confirmations on each ordinary point.
+
+### 9.2 Scoring and completion
+
+- Save each point, timeout, serve change, pause/resume, set transition, and correction as a recorded event.
+- Validate scores and transitions against the server-side match rules. A client cannot change rules or finalized results.
+- Undo must compensate an earlier event; do not erase the original audit history.
+- Manual corrections require a reason and a visible before/after summary. Restrict reopening completed sets according to the organizer's policy.
+- End Game shows a review of all sets and winner. Validate completion, or explicitly record an exceptional incomplete/abandoned outcome for organizer review.
+- End Game closes play, stops match timing, releases court occupancy, and submits the result. Approval may occur afterward.
+- Display submission success only after the backend accepts it. A lost response must be safely retryable.
+- A completed set alone must not release the court, end access, or finish the match.
+
+## 10 Persistent games and referee recovery
+
+The authoritative game state is central and survives browser closure, phone failure, server process restart, or loss of a live connection.
+
+- Commit every accepted action to PostgreSQL before acknowledging Saved. Preserve event sequence, current scores, rules, timers, court assignment, timeout counts, serving state, and completed sets.
+- Keep the game in progress until an explicit authorized lifecycle action changes it. Referee session expiry or inactivity is not End Game.
+- Re-scanning a valid game QR opens Resume Game and retrieves the latest authoritative state.
+- Resume must reconstruct the running or paused timer from stored start and pause timestamps; do not restart the timer or rely on a browser interval as its source of truth.
+- Maintain one active scorer at a time. Resume and take scoring control must revoke the previous session's write authority atomically.
+- Use a scorer generation/fencing value checked on every write, so a previously connected phone cannot overwrite the resumed game.
+- Include a unique client action identifier and expected match version in every mutation. Retrying an accepted action returns its existing outcome without adding another point.
+- Process actions in order. Reject stale or conflicting changes and fetch authoritative state; never silently replace the game's state with an old browser snapshot.
+- Keep a durable same-device queue for short connectivity loss where available. Queued actions remain visibly Pending and reconcile in order.
+- If storage is unavailable, warn that offline entry cannot be persisted. A new phone can recover centrally acknowledged events, but cannot recover unsynchronized actions that existed only on a failed phone.
+- On takeover, review or reject pending actions from the old scorer rather than applying them after ownership changes. Provide a reconciliation view for authorized corrections.
+- Permit session renewal while a game remains active. QR admission expiry must not unexpectedly terminate a valid ongoing scorer session.
+- Restore readiness checks, connection status, and the wake-lock request when a game is resumed.
+
+## 11 Screen awake and whistle
+
+### 11.1 Screen awake
+
+- Request the Screen Wake Lock API when Start Game or Resume Game succeeds and the scoring page is visible.
+- Maintain the request during gameplay, timeouts, between sets, and intentional match pauses while the game remains open.
+- Observe release/visibility events and request again when the page becomes visible and the game is still active.
+- Release the wake lock on End Game, explicit exit, or access revocation.
+- Show Screen awake when active, and a clear unavailable/interrupted state with concise device-setting guidance when unsupported or denied.
+- Serve the application over HTTPS. Wake lock is conditional on browser/device support and visible foreground use; it cannot guarantee prevention of manual locking or override device power restrictions. See references R01 and R02.
+
+### 11.2 Whistle
+
+- Include a prominent whistle button and a pregame Test whistle action.
+- Bundle a short, recognizable whistle sound; unlock audio through an explicit user gesture and provide a clear success/failure state.
+- Avoid a network fetch delay on each whistle press. Prevent stuck or overlapping playback.
+- Use the available application audio level, while respecting the user's device/system volume.
+- Do not claim that a browser can force hardware volume to maximum or guarantee venue loudness. Provide a concise suggestion to test the phone/speaker at the venue.
+- A whistle action must not change the score, automatically end the game, or become a substitute for a scoring event.
+
+## 12 Public tournament pages
+
+- Every tournament has a stable public URL, but anonymous access is enabled only when its organizer selects Public.
+- Teams, players, and spectators use the same read-only page without login.
+- Include overview, schedules, live games, completed results, points tables/leaderboard, divisions, stages, brackets, announcements, venues, and weather.
+- Provide team, division, stage, date, venue, and court filters. A team visitor can quickly find its next game and results.
+- Show planned and updated times, Court to be assigned where applicable, match status, current set/live score, and official/provisional result labels.
+- Optional favorite-team preferences may be stored locally without creating an account.
+- Anonymous users cannot obtain private tournament data by changing identifiers, subscribing to a live feed, downloading a report, or loading a cached endpoint.
+- Switching Public to Private must block new anonymous page, API, export, and subscription access promptly, invalidate public caches, and close or clear existing live views.
+- Information already viewed, printed, or downloaded while public cannot be recalled; do not promise retroactive deletion of a spectator's copy.
+- Public/private visibility controls spectators. A private tournament may still grant a referee permission to conduct its specific game through the private QR workflow.
+- Exclude organizer accounts, private team contacts/rosters, raw audit payloads, QR codes, access secrets, backups, and internal operational data.
+- Do not offer referee access from the public page or reuse the public share link as a scoring credential.
+
+## 13 Fullscreen public display
+
+- Provide a distinct TV/projector presentation route and a clean in-page fullscreen layout.
+- Display only organizer-selected tournament information: live games, selected courts/divisions, standings, results, upcoming games, brackets, announcements, weather, and optional sponsor content.
+- No management controls, navigation menus, scoring buttons, QR codes, login form, or edit affordances.
+- Organizers configure the display privately, with preview, widget selection, ordering, sizes, rotation interval, court/division filters, colors, logos, and text size.
+- Public page navigation and the fullscreen presentation are separate experiences.
+- Browser immersive fullscreen may require a user gesture or device setup. The application must still offer a clean presentation layout when the browser cannot remove its own chrome.
+- Show an unobtrusive stale/offline indication instead of silently displaying outdated scores as live.
+- Preserve a readable application credit without obscuring match information.
+
+## 14 Organizer dashboards and visualizations
+
+- Provide organization-wide and tournament-level dashboards, with separate permissions and configuration.
+- KPI cards: tournaments, teams, scheduled games, live games, completed games, delayed games, occupied/available courts, and results awaiting approval.
+- Donut charts: match status distribution, tournament completion, and team distribution by division.
+- Bar charts: team wins/losses, points/sets, and court usage. Line charts: match activity and duration trends where meaningful data exists.
+- Tables: standings, upcoming fixtures, recent results, referee assignments, and exceptions requiring action.
+- Brackets: stage progression, seeded or TBD participants, and links to authorized match views.
+- Venue maps: geographic pins, addresses, and navigation links. Uploaded court layout is a separate optional visual; no precise indoor positioning is required.
+- Show metric definitions and sample sizes. Derive charts from real persisted data, honor filters, and provide an accessible table alternative.
+- Support configurable widgets, order, sizing, saved filters, light/dark theme, and reset to defaults. Provide touch-friendly customization; do not require dragging as the only method.
+- Keep public widget settings separate from private organizer preferences. Public previews use public-safe data.
+- Handle no data, loading, error, and partial/stale states consistently.
+
+## 15 Venue weather
+
+- Resolve venue address to verified latitude/longitude and store the venue's IANA timezone. Allow organizer correction of map position.
+- Retrieve available daily conditions, high/low temperature, rain probability, and wind for the event's relevant dates.
+- Show at most seven tournament-day forecasts, using the provider's actual forecast horizon. Do not substitute today's weather for a future event date.
+- For events beyond the forecast horizon, show Forecast available closer to the tournament.
+- For multi-day tournaments and long leagues, show the upcoming relevant event days in the available window; roll the view forward as time passes.
+- Where there are multiple venues, make the venue associated with the displayed forecast clear.
+- Show units, date, timezone, provider attribution where required, and last update time. Allow Celsius/Fahrenheit preferences.
+- Cache requests, handle provider failures/rate limits, and show unavailable or stale labels. Weather failure must not block scoring or tournament administration.
+- Keep external credentials on the server. Select a provider whose licensing and usage terms support the intended platform; do not assume a noncommercial free tier covers commercial use.
+- Reference R03 demonstrates forecast feasibility; it does not select the final provider.
+
+## 16 Reports imports and exports
+
+### 16.1 Standard reports
+
+- Tournament/league summary with teams, divisions, games, outcomes, and completion.
+- Match report with teams, stage, court, rules used, planned/actual times, set scores, winner, outcome, and approval status.
+- Standings report with award totals, tie-break metrics, ranking explanations, and unresolved ties.
+- Team performance report with matches, wins/losses/draws, sets, points, and event-specific history.
+- Schedule and court-use reports with reservations, actual occupation, delays, and planned versus actual durations.
+- Referee assignment and outstanding-results report, without exposing access secrets.
+- Authorized audit/correction report identifying changes, responsible actor/session, time, and reason.
+- Historical comparisons across selected tournaments/seasons within the permitted organization.
+
+### 16.2 Report interface
+
+- Provide search, sorting, pagination, column selection, totals where meaningful, saved filters, and clear scope labels.
+- Filter by tournament, division, stage, team, date range, venue, court, result status, and outcome where applicable.
+- Generate CSV, XLSX, PDF, and printer-friendly layouts. Exported rows must match the selected filters and authorization.
+- Include organization/tournament, generation time, timezone, filters, official/provisional status, and standings generation where relevant.
+- Escape spreadsheet formula-leading values and untrusted text appropriately. Sanitize rendered content and validate uploaded files.
+- Large reports run as background jobs with queued/running/completed/failed states, progress, cancellation where safe, and expiring authorized downloads.
+- Public visitors may access only explicitly enabled public-safe report types. Public output never includes QR codes or internal audit/contact fields.
+- Recheck authorization when generating and downloading exports. Revoked users must not retain new download access through a permanent file link.
+- Saved report views belong to the user/organization scope. A view is not an authorization grant.
+
+### 16.3 Imports and organization data export
+
+- Offer downloadable templates for teams, entries, fixtures, and organizer-maintained referee metadata.
+- Validate headers, required fields, identifiers, duplicates, division/venue references, dates/timezones, and permitted values.
+- Show a preview and row-level errors before applying an import. Use a reviewable commit with predictable all-or-nothing or explicitly selected valid-row behavior.
+- Audit the import and preserve rejected-row feedback. Do not silently overwrite existing results or create staff accounts from a team import.
+- Organization administrators can export their organization's supported business data and configuration in a documented machine-readable package.
+- Exclude authentication secrets, raw access tokens, other organizations' data, and infrastructure-only backup material.
+- Export is for ownership/portability; it is not the platform disaster-recovery backup.
+
+## 17 Announcements help and attribution
+
+- Provide tournament announcements with visibility, publication dates, and an optional expiry.
+- Provide organizer notifications for schedule changes, failed jobs, access changes, disconnected scorers, and results awaiting review.
+- A disconnected-scorer alert is informational and must not automatically end its match.
+- Provide contextual help for rule setup, tie breaks, court assignment, QR access, recovery, sound, and device screen-awake behavior.
+- Add confirmation and accessible feedback for important actions; error messages should identify the next useful step without leaking internal stack traces.
+- Support organization logo/colors and optional sponsor images/links, subject to public content sanitization.
+- Display the exact credit Designed and developed by Vamsi Pinnaka on login, organizer, referee, public, fullscreen, and help/about experiences.
+- The credit must remain readable and must not block scoring controls or live display content. Preserve it when organizations customize branding.
+
+## 18 Interface inventory and mobile design
+
+Implement these complete routes or equivalent navigation destinations:
+
+| Experience | Required pages |
+| --- | --- |
+| Identity | Login, invitation acceptance, password reset, profile/security, session management |
+| Platform administration | Organizations, initial administrator provisioning, service health, audited support |
+| Organization | Overview, organizer users/roles, teams, venues/courts, branding/settings |
+| Tournament | Setup/review, overview dashboard, divisions/entries, stages/rules, schedule, court operations |
+| Game operations | Game preparation, court assignment, private QR reveal, scorer status/access, result review |
+| Reporting | Report browser, saved views, imports, export jobs, audit/corrections |
+| Public | Tournament overview, schedule, live games, results, standings, brackets, venues/weather |
+| Presentation | Fullscreen read-only display and private display editor/preview |
+| Referee | Access exchange, ready/start, live scoring, resume/takeover, game review/submission |
+
+- Optimize organizer and referee workflows for iPhone Safari and Android Chrome first. Desktop administration and TV/projector display must also work.
+- Use responsive navigation: mobile bottom/tab navigation or a compact menu, and an appropriate desktop sidebar/header.
+- Support portrait and landscape, safe-area insets, device text scaling, and narrow screens down to approximately 320 CSS pixels.
+- Use a consistent professional design system with typography, spacing, colors, icons, components, focus states, and light/dark themes.
+- Make primary touch targets at least 44 by 44 CSS pixels where feasible. Prevent accidental adjacent score presses through spacing and clear team identity.
+- Target WCAG 2.2 AA: contrast, keyboard access, screen-reader labels, logical focus, accessible errors, reduced motion, and meaningful text/table alternatives for charts.
+- Do not rely on color alone for team identity, status, errors, or ranking changes.
+- Keep screens usable during poor connectivity and avoid blocking overlays for ordinary background refreshes.
+- A manifest and installable app shell may be included. Do not cache private/referee pages indiscriminately or serve stale live data as current. Native iOS/Android applications are outside V1.
+
+## 19 PostgreSQL data model
+
+The following is a proposed logical model. Codex may simplify table names and projections while preserving every required invariant, audit boundary, and future-compatible relationship.
+
+### 19.1 Identity and organization entities
+
+| Entity | Principal fields and relationships |
+| --- | --- |
+| users | UUID, normalized unique email or provider subject, display name, status, created/updated timestamps |
+| authentication records | Credential/provider references, MFA data, reset/invitation hashes, session/revocation metadata; never public |
+| organizations | UUID, name/slug, branding, timezone, status, settings |
+| organization_memberships | Organization/user, status, invitation/activation timestamps; unique organization and user pair |
+| roles and permissions | Organization role definitions, membership bindings, optional tournament scope; separate platform bindings |
+| organization_invitations | Organization, invited email, assigned scope, hashed token, expiry, inviter, accepted/revoked time |
+
+### 19.2 Competition and scheduling entities
+
+| Entity | Principal fields and relationships |
+| --- | --- |
+| teams | Organization, reusable display identity, logo/color, private contact fields, archived flag |
+| tournaments | Organization, slug, name, tournament/league type, lifecycle, visibility, dates, timezone, settings |
+| venues and tournament_venues | Organization, address, coordinates, timezone; venue associations per tournament |
+| courts and availability windows | Venue, court name, closures, opening hours, reservation windows |
+| divisions | Tournament, name/category/skill labels, defaults, display order |
+| competition_entries | Team, tournament/division, seed, participation state, event display snapshots |
+| stages and groups | Division, order, supported format, pool/group definitions, qualification settings |
+| stage_entries | Competition entry, stage/group, seed and qualification state |
+| rule_versions | Validated scoring, awards and tie-break configuration, version, creator, effective scope |
+| matches | Tournament/division/stage, planned/actual times, lifecycle, rule snapshot reference, outcome, version, scorer generation |
+| match_slots and fixture_dependencies | Two participant positions, entry or qualification source, validated advancement dependencies |
+| referee_assignments | Match, optional name/contact/availability metadata; not a V1 referee account |
+| court_assignments | Match/court, reserved/occupied state, assigned/start/released timestamps, assigning actor, history |
+
+### 19.3 Match and operational entities
+
+| Entity | Principal fields and relationships |
+| --- | --- |
+| qr_grants | Game, hashed secret, issuer, issued/expiry/revoked times, admission policy |
+| scoring_sessions | Game/grant, session hash, generation, issued/renewal/revocation times, connection status |
+| match_events | Match, sequence, unique client action ID, type, actor/session, expected/new version, payload, server timestamp |
+| match_state and match_sets | Current projections, set scores/status, serve/timeouts, accumulated clock and anchor, latest event sequence |
+| result_revisions | Submitted/final result, set breakdown, approval actor/time, predecessor revision, correction reason |
+| standings_generations and rows | Division/stage scope, source result/rule revisions, generation number, computed metrics/ranks |
+| dashboard_configurations | Owner/scope, public/private display kind, schema version, validated JSONB layout |
+| announcements and notifications | Visibility/scope, content, publication/expiry, recipient and read state |
+| import_jobs and export_jobs | Organization/requester, filters, status, validation/error/progress, file metadata and expiry |
+| audit_events | Scoped actor/session, action, entity, reason, before/after summary, time; append-only |
+| outbox_events | Committed changes awaiting live publication or downstream processing, ordering/version, delivery metadata |
+| weather_cache | Venue/provider/local date, forecast values, forecast window, fetched/expiry time |
+
+Store logos, uploaded court layouts, and generated files in private object/file storage with PostgreSQL metadata and authorization. A local private file-storage adapter is acceptable for development; production must support durable storage independently of replaceable app containers.
+
+### 19.4 Types relationships and integrity
+
+- Use UUID primary identifiers, integer scores/counts, and timestamptz for instants. Store explicit IANA timezones and local calendar dates where needed.
+- Keep core relationships relational. JSONB is appropriate for validated layouts, rule payloads, format options, event payloads, and report filters.
+- Every organization-owned record carries organization_id. Use composite foreign keys or equivalent enforced relationships to prevent cross-organization links.
+- Enforce tournament/division/stage consistency in addition to organization consistency. A match cannot select an entry from a different competition simply because both belong to the same organization.
+- Exactly two distinct valid participants are required before normal play. A qualifying placeholder must be resolved before start.
+- Validate fixture dependency graphs as acyclic. Prevent self-references, invalid source stages, and unresolved conflicting qualifiers.
+- Enforce nonnegative projected scores/timeouts and valid set numbers. Use server validation for cross-row rule checks rather than a CHECK constraint that reads unrelated rows.
+- Use unique constraints on organization membership, competition entry scope, match event sequence, and match/client action ID.
+- Enforce one unreleased active assignment per court and one current court assignment per match through database constraints, such as partial unique indexes.
+- Enforce one active scorer generation/session per match. Lease/heartbeat health must not be confused with game lifecycle.
+- Use foreign keys and archive/restrict deletion for referenced competitions, rules, events, results, and audits. Do not cascade-delete match history when a team or membership is removed.
+- Add indexes for organization/tournament scope, scheduled date, match status, division/team filters, event sequence, audit time, outbox status, and grant/session lookup hashes.
+- Document every index's query purpose; measure query plans for actual report and live-match access paths instead of indexing every column.
+- Use separate migration, backup, and runtime database roles. The application database is private and never accessed directly by browsers.
+
+### 19.5 Isolation and row security
+
+- Enforce organization authorization in every application path: request, live feed, queue job, export, cached response, stored file, and support action.
+- Use PostgreSQL row-level security as defense in depth on organization-owned tables where the chosen architecture supports it.
+- Set trusted organization context transaction-locally. With pooled connections, do not leave one organization's context on a connection returned to the pool.
+- Use a nonowner runtime role without superuser or BYPASSRLS privileges. A policy is not effective defense if the runtime role bypasses it.
+- Public and referee paths establish a narrowly authorized scope and select public/game-safe fields. They do not get unrestricted organizer queries.
+- Reference R04 explains PostgreSQL row security; reference R07 provides multi-organization security guidance.
+
+## 20 Transactions concurrency and live updates
+
+### 20.1 Accepted scoring action
+
+Each mutation supplies match ID, scoring session identity, scorer generation, unique client action ID, expected match version, action type, and validated payload.
+
+Process an action in a database transaction:
+
+1. Authenticate and authorize the caller's scope. A duplicate receipt may be returned only to an appropriately authorized caller; never use deduplication to bypass access checks.
+2. Lock the match row and recheck lifecycle, scorer generation, and version.
+3. If the client action ID was already committed, return its existing authorized receipt instead of applying it again.
+4. Validate the action and rules, append the event, and update the current set/score/clock projection.
+5. Increment match version and append an outbox event in the same transaction.
+6. Commit before responding Saved. Publish live changes only after commit.
+
+Define stable lock ordering, short transactions, timeouts, and bounded retry handling for contention. PostgreSQL row locks can serialize changes to one match without locking unrelated tournaments; see R05.
+
+### 20.2 Court and scorer transactions
+
+- Court assignment/start/reassignment must lock and recheck the relevant resources, then commit the match and occupancy change together.
+- End Game commits match ending, timer stop, occupancy release, result submission, and publication records consistently.
+- Scorer takeover increments the generation and revokes the old writer within one transaction. Old requests either commit before the handover in order or are rejected afterward.
+- Do not depend on a browser's disabled button to enforce single-writer or court exclusivity.
+
+### 20.3 Live delivery and projections
+
+- Deliver organization, public, and referee updates through authorized WebSocket/SSE channels or an equivalent mechanism. Provide a bounded polling fallback.
+- A committed event must eventually be published even if the app process fails immediately after commit. Use a transactional outbox or equivalent reliable publication.
+- Updates contain stable event identity and match/generation versions. Clients ignore duplicates/out-of-order messages and can fetch a fresh state snapshot.
+- On reconnection, refresh authoritative state and subscription authorization. Display last-update time and connection status.
+- Standings are rebuildable projections of accepted result revisions and rule versions, never independent manually edited truth.
+- Prevent an older recalculation/job from overwriting a newer standings generation.
+- Public subscriptions must be revoked when visibility becomes private. A publicly known tournament ID is not authorization.
+
+## 21 Results corrections and bracket progression
+
+- Separate play lifecycle, submission state, approval/finalization state, and outcome.
+- Organizers can review a submitted result against recorded sets, rule snapshot, and correction history.
+- Finalization updates the official results/standings generation and evaluates dependent fixtures.
+- Authorized correction of a finalized result requires a reason and a new result revision; keep the old revision.
+- Before changing qualifiers, show the impact on standings and downstream fixtures.
+- If a downstream game has not started, apply approved participant changes and audit the affected fixtures.
+- If a downstream game has started or ended, block silent participant replacement. Flag it for organizer adjudication while preserving the played teams, scores, and history.
+- A rule change intended to recalculate historical standings must be an explicit versioned action with preview and confirmation.
+- Referees cannot reopen a finalized match through an old QR. Reopening requires an authorized organizer and clear court/access/lifecycle treatment.
+
+## 22 API and integration contract
+
+Use a versioned API, consistent validation errors, request IDs, pagination, and documented permissions. Endpoints below are a proposed resource layout, not a mandatory URL spelling.
+
+| Resource group | Required operations |
+| --- | --- |
+| Authentication | Login/logout, invitations, password reset, MFA, session list/revocation |
+| Organizations | Memberships/roles, switching, branding/settings, platform provisioning |
+| Competitions | Tournament/division/stage/entry CRUD, rule validation/versioning, publish/private/archive |
+| Scheduling | Fixtures, generation preview, schedule revisions, availability, court reservation/assignment |
+| Game administration | Prepare, QR reveal/grant, revoke/handover, result approval/correction, exceptional outcomes |
+| Delegated referee | Grant exchange, state/resume/takeover, action receipt, start/pause/end, session renewal |
+| Public | Public-safe overview, fixtures, live state, results, standings, brackets, venue/weather |
+| Reports | Report definitions/views, export jobs/downloads, imports/preview/commit, organization export |
+| Presentation | Public configuration read; authorized editor writes |
+| Operations | Health/readiness, metrics access, job/backup status restricted to appropriate operators |
+
+- Public reads recheck visibility and return limited representations. Anonymous clients do not call private CRUD endpoints.
+- Referee mutation payloads cannot supply arbitrary organization identity, rule changes, or another match's credentials.
+- Use server-derived context and backend schema validation. Apply rate limits to login, grant exchange, scoring abuse, public reads, and costly exports.
+- Provide explicit conflict responses containing the current version or recovery guidance, without leaking unauthorized data.
+- External integrations use environment/secret configuration, retry/backoff, timeouts, and failure isolation.
+- Weather, map/geocoding, email, and storage adapters must be replaceable and mockable in tests. Demo adapters must identify themselves.
+- Document the API with OpenAPI or an equivalent accurate contract and include example scoring/recovery payloads.
+
+## 23 Security privacy and administration
+
+- Use HTTPS in production, secure HttpOnly session cookies, appropriate SameSite settings, CSRF protection for cookie-authenticated mutations, and explicit allowed origins.
+- Use secure password hashing via established libraries, MFA recovery controls, login throttling, token hashing/expiry, logout/revocation, and secret management.
+- Protect against injection, cross-site scripting, unsafe file upload/rendering, path traversal, forged requests, and object-level authorization failures.
+- Audit account/role changes, publication changes, rules, schedule/court changes, QR issuance/revocation, scorer takeover, scores/corrections, results, exports, and support actions.
+- Audit actor types correctly: an organizer has an authenticated identity; a V1 referee has a delegated session, optional unverified name, and the issuing organizer. Do not claim verified referee identity.
+- Do not log passwords, raw grant/session secrets, MFA secrets, private report contents, or unnecessary personal information.
+- Provide documented data retention, organization offboarding/export, and deletion handling. Backup retention can delay physical removal; state that accurately.
+- Restrict platform support and operational tooling. Record explicit access to private customer data when support access is enabled.
+- Expiring file links must be scoped and authorized. Cache keys and background jobs must include the appropriate organization/user/public scope.
+- Test isolation using at least two organizations, including a shared organizer identity and multiple database pool connections.
+- Enterprise branding or security controls do not constitute a certification. Do not claim SOC 2, GDPR certification, or contractual service guarantees without the corresponding work and agreement.
+
+## 24 Backups recovery and service operations
+
+### 24.1 Backup scope
+
+- Back up the complete PostgreSQL platform database, durable uploaded/generated files, and necessary deployment/configuration recovery material.
+- Encrypt backups in transit and at rest. Restrict access and keep copies separate from the primary application's failure boundary.
+- Support scheduled base backups and continuous log archiving/managed point-in-time recovery. Logical export alone is not a complete point-in-time recovery strategy; see R06.
+- Set explicit retention and storage-lifecycle policies. Proposed defaults are 30 days of recovery material, disaster recovery data loss at most 5 minutes, and restoration within 60 minutes.
+- These recovery targets are proposed acceptance goals. Choose an actual hosting/storage architecture, measure it, and document achieved values before claiming production readiness.
+- A normally acknowledged score must survive an application/browser restart. Recovery-point limits describe infrastructure disaster, not permission to lose acknowledged scores during ordinary application operation.
+
+### 24.2 Recovery procedure
+
+- Provide an operator runbook for database failure, app outage, file loss, failed migration, and incorrect-data recovery.
+- Restore to an isolated environment, validate database/event/projection consistency and file references, and test permissions before production recovery.
+- Test a complete restore before launch and at least quarterly thereafter; alert on backup failures and record restore results.
+- Organization exports are separate from operator backups. Organization users do not receive a button that rolls back the shared platform database.
+- To recover one organization's data, restore into an isolated environment and selectively reconcile it with reviewed relationships. Never rewind other organizations or overwrite shared global user identities.
+- Define recovery ownership, escalation contacts/configuration, and a process for informing organizers of an outage.
+
+### 24.3 Monitoring and releases
+
+- Monitor uptime, API errors/latency, database health and pool use, slow queries, outbox/job backlog, active scorer connections, storage capacity, and backup age/failures.
+- Expose lightweight liveness and dependency-aware readiness checks. Keep detailed operational endpoints private.
+- Use structured logs with request/organization/match context where appropriate, while redacting secrets.
+- Provide development, test/staging, and production configuration; never use production data in an unsecured demo.
+- Run migrations through one controlled release step, not concurrently from every application replica. Document rollback/recovery for incompatible changes.
+- Application processes must not depend on local memory for active match truth. Document how to add replicas and coordinate live delivery/jobs.
+- Containerized local development is recommended. Keep PostgreSQL private; browser/native clients talk only to the API.
+- Backups, authentication, and health monitoring are V1 requirements. Multi-region failover and contractual high-availability commitments are later architecture decisions.
+
+## 25 Performance and quality targets
+
+The following are proposed measurable release targets, to be validated against an agreed hosting environment rather than presented as already achieved.
+
+- At the 75th percentile of mobile visits, target Largest Contentful Paint at most 2.5 seconds and Interaction to Next Paint at most 200 milliseconds.
+- Show immediate local point feedback while visibly distinguishing Pending from Saved. On a normal connection, target p95 durable scoring acknowledgment within 1 second.
+- Target committed-score delivery to connected live views within 2 seconds under the baseline load.
+- Initial load-test baseline: 25 simultaneous scoring games and 500 read-only viewers, spread across at least two organizations. Record infrastructure, network assumptions, error rates, and bottlenecks.
+- No duplicated accepted actions, cross-organization access, lost acknowledged events during process restart, or conflicting active court assignments in correctness tests.
+- Support graceful degradation when weather, map, email, or report jobs fail. Core scoring remains usable.
+- Validate real iPhone Safari and Android Chrome behavior for layout, sound, wake lock, session recovery, safe areas, and weak connections.
+- Use bounded pagination and report jobs. Avoid downloading the entire event history on each score update.
+- Compare derived projections with journal/result source data during recovery and meaningful integration tests.
+- Performance targets do not define a final capacity or uptime guarantee; publish measured results and outstanding limits.
+
+## 26 Acceptance scenarios
+
+These scenarios are required release checks. Automate data/authorization/concurrency checks where meaningful; use real-device/manual checks for hardware/browser behavior that mocks cannot prove.
+
+| ID | Scenario and expected outcome |
+| --- | --- |
+| A01 | A shared organizer belongs to organizations A and B; switching changes scope/permissions without altering either membership |
+| A02 | Guessing another organization's object IDs, report links, live channels, or file paths reveals no unauthorized data |
+| A03 | Removing membership in A leaves the user's B access and historical audit references intact |
+| A04 | A scheduler cannot change roles, finalize results, or edit events outside the granted scope |
+| A05 | An organizer creates a multi-division tournament and a months-long league with different stage scoring rules |
+| A06 | Setup rejects invalid set/ranking policies; the organizer explicitly reviews points and tie-break configuration |
+| A07 | Starting a match freezes its effective rules; later defaults do not change its score interpretation |
+| A08 | A round robin and pool-to-knockout event generate correct fixtures, qualifiers, and byes |
+| A09 | A scheduled game without a court shows Court to be assigned on organizer and public views |
+| A10 | Two concurrent organizers claim one available court; only one current assignment is accepted |
+| A11 | A closed/reserved court or overlapping team/referee assignment produces an actionable conflict |
+| A12 | QR is hidden on page load; Show QR displays it with a visible countdown starting at 10 |
+| A13 | At zero the QR hides; repeated reveals reset to 10 with no limit on the number of reveals |
+| A14 | Backgrounding the organizer screen hides the QR; returning does not revive an expired display |
+| A15 | A referee admitted during QR display keeps scoring after the QR hides |
+| A16 | A game grant gives access only to that game; public pages and exports never disclose QR secrets |
+| A17 | Points, serve changes, timeouts, undo and set transitions produce the correct recorded state |
+| A18 | A set needing a two-point lead continues correctly; deciding-set and hard-cap policies follow the snapshot |
+| A19 | Switching display sides preserves team identities and all scoring data |
+| A20 | Repeating an accepted client action after a lost response adds no duplicate point |
+| A21 | Concurrent stale writes are rejected/reconciled rather than silently overwriting a newer match state |
+| A22 | After Saved points/timeouts, a phone crashes; match and court remain active |
+| A23 | Re-scan restores current/completed sets, serve, timeouts, court, rule snapshot, and correct running/paused elapsed time |
+| A24 | Resume takeover fences the old phone; delayed old requests cannot mutate the match |
+| A25 | Offline actions stay Pending; reconnection on the same device reconciles without duplicates |
+| A26 | A different phone never claims to recover unsent local points; reconciliation allows an audited correction |
+| A27 | Restarting the app process restores acknowledged game state from PostgreSQL |
+| A28 | Start/resume requests wake lock; visible return requests it again; End Game releases it |
+| A29 | Unsupported/denied wake lock has a clear state and guidance; manual lock/background behavior is accurately documented |
+| A30 | Whistle works after user interaction on tested devices, has a pregame test, and does not change score/state |
+| A31 | End Game confirms the set summary, stops play/timing and frees the court while approval can remain pending |
+| A32 | Official standings reflect finalized results and display the configured point/tie-break metrics |
+| A33 | Two-team and multi-team ties, zero quotients, unequal pool games, forfeits and unresolved ties follow explicit policies |
+| A34 | Finalized-result correction keeps revision history and previews affected rankings/qualifiers |
+| A35 | A changed qualifier cannot silently replace a participant in an already-started downstream game |
+| A36 | Public visitors see schedules/live scores/results/standings and can filter their team without login |
+| A37 | Public-to-private change blocks anonymous pages, APIs, exports and existing live delivery |
+| A38 | Private visibility still permits a valid delegated referee to conduct its authorized game |
+| A39 | Fullscreen view contains selected content and credit, with no QR, management/scoring controls or navigation menus |
+| A40 | Public and organizer layouts/preferences remain independent; charts match filtered persisted data |
+| A41 | Weather uses the correct venue/local dates, shows at most seven available event days, and labels unavailable forecasts |
+| A42 | Weather-provider failure does not block scoring; stale/unavailable states are accurate |
+| A43 | CSV/XLSX/PDF reports match filters, permissions, source generations and official/provisional labels |
+| A44 | Malformed imports show row errors/preview and cannot overwrite finalized results silently |
+| A45 | Export jobs/downloads recheck permissions after user revocation; public files contain public-safe fields only |
+| A46 | A backup restore reproduces accepted events, rules, projections, audits and file references in an isolated environment |
+| A47 | Selective organization recovery preserves another organization's records and global user memberships |
+| A48 | Authorization and court/scorer race tests pass against PostgreSQL, not a SQLite substitute |
+| A49 | All core screens work on iPhone Safari, Android Chrome, desktop, and the fullscreen target |
+| A50 | Keyboard/screen-reader use, contrast, text scaling, reduced motion and chart alternatives pass the accessibility review |
+| A51 | Load tests record the proposed latency/live-delivery targets and reveal any unachieved limits |
+| A52 | Every required experience displays Designed and developed by Vamsi Pinnaka without obstructing use |
+
+## 27 Codex delivery sequence
+
+Implement the complete V1 in reviewable increments. Do not stop after scaffolding, mock screens, a schema alone, or a single happy-path demo.
+
+1. Inspect the repository or create a documented new project. Record the chosen stack, editable defaults, and requirement traceability.
+2. Establish PostgreSQL, controlled migrations, global organizer identities, organization memberships/roles, and meaningful isolation tests.
+3. Build organization/team/venue/court administration and tournament/division/stage/rule setup with validation.
+4. Implement fixtures, schedule generation/review, dynamic court reservations, and lifecycle operations.
+5. Implement the authoritative match event service, projections, timer state, deduplication and transactional outbox.
+6. Implement private QR reveal/admission, delegated sessions, scoring, takeover/recovery, sound and wake-lock behavior.
+7. Implement approval/corrections, official rankings, tie-break explanation and safe bracket progression.
+8. Implement private dashboards, public pages, fullscreen presentation, maps/weather and publication controls.
+9. Implement reports, imports/exports, audit access, operational monitoring, backups and restore runbooks.
+10. Complete mobile/accessibility, security/concurrency, end-to-end, restore and load validation; fix defects and document material limits.
+
+Required deliverables from Codex:
+
+- Complete source code and reproducible setup instructions.
+- PostgreSQL migrations, schema/relationship documentation, index rationale and role/RLS setup.
+- Configured local development environment and an environment-variable example without secrets.
+- Versioned API documentation and examples for score action, resume/takeover, public state and conflicts.
+- Isolated seed/demo data exercising two organizations, multiple divisions, a league, live/ended games and ranking ties.
+- Meaningful unit/integration/end-to-end checks tied to acceptance IDs, plus a real-device test checklist.
+- Backup/restore, migration, deployment, secret rotation, incident and organization-export documentation.
+- A release checklist showing completed requirements, measured targets and any unresolved gaps. Unsupported integrations must be identified accurately.
+
+## 28 Deferred features and remaining product choices
+
+The following belong to later releases and must not be introduced as V1 account requirements:
+
+- Team and player logins, individual self-registration, organization/team approval portals and self-service season rosters.
+- Public open-play discovery, individual enrollment, waitlists, check-in and rotating/temporary-team assignment.
+- Registration payments/refunds, tickets, waivers, eligibility documentation and financial accounting.
+- Detailed individual player/rally statistics, formal rotation/substitution/sanction scoring and advanced official scoresheets.
+- Native iOS/Android applications.
+- Custom report builders, scheduled report distribution, external APIs/webhooks for customers, calendar integrations and enterprise SSO.
+- Unsupported competition formats, custom domains, full multilingual localization and multi-region failover.
+
+Before a production launch, confirm the organization's desired formats and ranking formulas, approval policy, QR admission lifetime, actual hosting/provider stack, licensed weather/maps service, backup retention, recovery objectives, load baseline, and support policy. Codex should use the explicitly labeled editable defaults to progress with a reviewable build; these choices do not justify silently hardcoding a universal rule or claiming an untested service guarantee.
+
+## 29 Technical and industry references
+
+These references verify relevant capabilities and limitations. The product scope above is the owner's requirements plus labeled implementation proposals; it is not a claim that any vendor implements every listed feature.
+
+- R01 Chrome Developers Screen Wake Lock API: https://developer.chrome.com/docs/capabilities/web-apis/wake-lock
+- R02 WebKit Safari 18.4 features and Home Screen wake-lock support: https://webkit.org/blog/16574/webkit-features-in-safari-18-4/
+- R03 Open Meteo forecast documentation: https://open-meteo.com/en/docs
+- R04 PostgreSQL row security policies: https://www.postgresql.org/docs/current/ddl-rowsecurity.html
+- R05 PostgreSQL explicit locking: https://www.postgresql.org/docs/current/explicit-locking.html
+- R06 PostgreSQL continuous archiving and point-in-time recovery: https://www.postgresql.org/docs/current/continuous-archiving.html
+- R07 OWASP Multi Tenant Security Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Multi_Tenant_Security_Cheat_Sheet.html
+- R08 Tournify features and tournament export benchmark: https://tournifyapp.com/features and https://help.tournifyapp.com/en/articles/15069302-getting-started-with-tournify
+- R09 LeagueApps reporting/export benchmark: https://support.leagueapps.com/hc/en-us/articles/18729556493207-LeagueApps-Analytics-Overview
+- R10 PostgreSQL partial indexes: https://www.postgresql.org/docs/current/indexes-partial.html
+- R11 PostgreSQL constraints: https://www.postgresql.org/docs/current/ddl-constraints.html
+- R12 W3C Web Content Accessibility Guidelines 2.2: https://www.w3.org/TR/WCAG22/
+

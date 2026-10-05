@@ -1,0 +1,72 @@
+{
+  "reviewed_at": "2026-10-05T19:00:27.825272+00:00",
+  "scope": "Synthetic report artifact only; no customer data or database reads",
+  "status": "passed_visual_review",
+  "renderer": "macOS CoreGraphics through ctypes; Poppler unavailable",
+  "source_pdf": "instance/validation/report-layout-validation.pdf",
+  "source_pdf_sha256": "dc2970d6ce5248034834a67de6bf28051f9b5be5ed129281b81923e29346a75a",
+  "source_pdf_bytes": 34814,
+  "rows": 8,
+  "columns": 20,
+  "pages": [
+    {
+      "page": 1,
+      "pdf_width_points": 841.8898,
+      "pdf_height_points": 595.2756,
+      "png": "instance/screenshots/report-layout-01.png",
+      "pixel_width": 1684,
+      "pixel_height": 1191
+    },
+    {
+      "page": 2,
+      "pdf_width_points": 841.8898,
+      "pdf_height_points": 595.2756,
+      "png": "instance/screenshots/report-layout-02.png",
+      "pixel_width": 1684,
+      "pixel_height": 1191
+    },
+    {
+      "page": 3,
+      "pdf_width_points": 841.8898,
+      "pdf_height_points": 595.2756,
+      "png": "instance/screenshots/report-layout-03.png",
+      "pixel_width": 1684,
+      "pixel_height": 1191
+    },
+    {
+      "page": 4,
+      "pdf_width_points": 841.8898,
+      "pdf_height_points": 595.2756,
+      "png": "instance/screenshots/report-layout-04.png",
+      "pixel_width": 1684,
+      "pixel_height": 1191
+    }
+  ],
+  "visually_inspected_pages": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "checks": {
+    "metadata_and_ranking_policy_readable": true,
+    "unique_entry_id_repeated_in_all_column_groups": true,
+    "long_names_wrap_without_overlap": true,
+    "markup_rendered_literally": true,
+    "extended_latin_accented_names_readable": true,
+    "infinity_symbol_readable": true,
+    "tables_within_page_margins": true,
+    "page_numbers_and_exact_credit_readable": true,
+    "missing_glyph_boxes_seen": false,
+    "clipping_or_overlaps_seen": false
+  },
+  "fixed_defects": [
+    "Wide tables repeated nonunique division rather than entry ID",
+    "Original Vera font lacked Polish ź glyph"
+  ],
+  "remaining_limits": [
+    "Single synthetic report with 8 rows and 20 columns, not all possible report volumes or scripts",
+    "No printer, mobile PDF reader or assistive-technology validation",
+    "Noto coverage and PDF Symbol fallback do not prove universal-script shaping"
+  ]
+}

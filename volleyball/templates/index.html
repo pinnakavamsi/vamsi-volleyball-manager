@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#102c26">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Volleyball tournament operations, live scoring, and official results.">
+  <title>Courtline · Volleyball Manager</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand.svg') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body data-experience="{{ experience }}" data-slug="{{ slug }}">
+  <a href="#main" class="skip-link">Skip to content</a>
+  <div id="app"><main id="main" class="initial-load"><span class="brand-ball" aria-hidden="true">◈</span><h1>Courtline</h1><p>Loading your volleyball workspace…</p></main></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+  <script type="module" src="{{ url_for('static', filename='boot.js') }}"></script>
+</body>
+</html>

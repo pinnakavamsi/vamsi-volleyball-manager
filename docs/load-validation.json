@@ -1,0 +1,150 @@
+{
+  "validated_at": "2026-10-05T18:46:35.939107+00:00",
+  "status": "measured",
+  "correctness_passed": true,
+  "environment": {
+    "os": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "logical_cpus": 12,
+    "python": "3.14.2",
+    "transport": "HTTP/1.1 over loopback TCP to isolated gunicorn; PostgreSQL TCP on local127.0.0.1:55432",
+    "application_processes": 2,
+    "application_threads_per_process": 8,
+    "load_generator_processes": 1,
+    "generator_shares_application_process": false,
+    "generator_writer_threads": 25,
+    "generator_reader_threads": 128,
+    "database_pool_max_connections_per_application_process": 30,
+    "database": "volleyball_load_f1e8ee48690a",
+    "database_disposable": true,
+    "database_preserved": false,
+    "database_settings": {
+      "server_version": "18.6 (Homebrew)",
+      "shared_buffers": "128MB",
+      "max_connections": "100",
+      "synchronous_commit": "on",
+      "fsync": "on"
+    }
+  },
+  "workload": {
+    "organizations": 2,
+    "active_scoring_games": 25,
+    "logical_concurrent_viewers": 500,
+    "distinct_viewers_served": 500,
+    "score_actions_per_game_per_second": 1,
+    "viewer_poll_seconds": 1.0,
+    "offered_read_requests_per_second": 500.0,
+    "measurement_window_seconds": 20,
+    "total_with_delivery_drain_seconds": 28.827,
+    "read_requests": 6606,
+    "score_requests": 479,
+    "acknowledged_score_actions": 479,
+    "writer_ticks_skipped_due_to_pending_request": 21,
+    "viewer_ticks_skipped_due_to_pending_request": 6742,
+    "initial_full_state_reads": 500,
+    "reader_endpoint": "/api/v1/public/<slug>/live",
+    "initial_full_state_endpoint": "/api/v1/public/<slug>"
+  },
+  "initial_full_public_state_http_latency": {
+    "samples": 500,
+    "p50_ms": 474.646,
+    "p95_ms": 916.432,
+    "p99_ms": 931.833,
+    "max_ms": 940.769
+  },
+  "durable_score_ack": {
+    "samples": 479,
+    "p50_ms": 462.942,
+    "p95_ms": 842.819,
+    "p99_ms": 1304.733,
+    "max_ms": 2016.369
+  },
+  "public_read_server_and_client_ms": {
+    "samples": 6606,
+    "p50_ms": 455.662,
+    "p95_ms": 1267.99,
+    "p99_ms": 2018.24,
+    "max_ms": 4606.725
+  },
+  "public_read_including_generator_queue_ms": {
+    "samples": 6606,
+    "p50_ms": 1368.418,
+    "p95_ms": 3743.718,
+    "p99_ms": 5010.527,
+    "max_ms": 6330.009
+  },
+  "load_generator_reader_queue_ms": {
+    "samples": 6606,
+    "p50_ms": 896.934,
+    "p95_ms": 2878.108,
+    "p99_ms": 3636.673,
+    "max_ms": 3980.399
+  },
+  "load_generator_writer_scheduling_ms": {
+    "samples": 479,
+    "p50_ms": 1.492,
+    "p95_ms": 2.687,
+    "p99_ms": 2.858,
+    "max_ms": 5.995
+  },
+  "committed_score_public_visibility": {
+    "samples": 119750,
+    "p50_ms": 883.549,
+    "p95_ms": 1718.661,
+    "p99_ms": 2861.248,
+    "max_ms": 6751.088,
+    "expected_viewer_score_observations": 119750,
+    "observed": 119750,
+    "not_observed_before_drain_ended": 0,
+    "fraction_of_expected_observations_within_2_seconds": 0.979666,
+    "definition": "From Saved response acknowledgment until a periodic public response contains that committed match version or newer."
+  },
+  "measurement_notes": [
+    "A viewer that has already received the committed version when Saved is acknowledged has zero visibility delay. Initial full-state requests are recorded separately from the live scoring window."
+  ],
+  "errors": {
+    "count": 0,
+    "request_error_rate": 0.0,
+    "samples": []
+  },
+  "correctness": {
+    "durable_point_events": 479,
+    "duplicate_committed_actions": 0,
+    "lost_acknowledged_actions": 0,
+    "journal_and_score_projections_consistent": true,
+    "occupied_courts": 25,
+    "runtime_role_superuser": false,
+    "runtime_role_bypassrls": false,
+    "cross_organization_object_denied": true,
+    "cross_organization_membership_denied": true,
+    "duplicate_retry_requests": 85,
+    "duplicate_retry_errors": 0,
+    "public_scope_violations": 0,
+    "public_secret_disclosures": 0
+  },
+  "targets": {
+    "durable_ack_p95_ms": 1000,
+    "durable_ack_target_met": true,
+    "committed_live_delivery_p95_ms": 2000,
+    "live_delivery_target_met": true,
+    "all_observed_scores_delivered_within_2_seconds": false,
+    "baseline_games_and_viewers_met": true,
+    "mobile_lcp_and_inp_measured": false
+  },
+  "limits": [
+    "Loopback HTTP includes gunicorn/socket overhead but excludes TLS, reverse proxies and external networks; this does not establish production capacity.",
+    "Local PostgreSQL and application share the same machine; no mobile radio, packet loss or geographic latency is simulated.",
+    "Bounded generator threads and one outstanding request per logical viewer apply client backpressure; queue delay and missed ticks are reported.",
+    "This is a short baseline, not a soak test; browser LCP/INP, real-device behavior and licensed integrations are unmeasured."
+  ],
+  "comparison": {
+    "previous_report": "docs/load-validation-before-optimization.json",
+    "previous_validated_at": "2026-10-05T18:10:25.756858+00:00",
+    "previous_score_ack_p95_ms": 4524.465,
+    "previous_public_read_p95_ms": 1736.631,
+    "previous_public_visibility_p95_ms": 5050.836,
+    "serialization_only_report": "docs/load-validation-after-serialization.json",
+    "serialization_only_score_ack_p95_ms": 5604.447,
+    "serialization_only_public_visibility_p95_ms": 3620.049
+  }
+}

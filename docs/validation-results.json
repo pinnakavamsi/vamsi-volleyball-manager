@@ -1,0 +1,29 @@
+{
+  "date": "2026-10-05",
+  "scope": "Local Volleyball Manager development build",
+  "postgresql_integration_suite": {
+    "passed": 100,
+    "failed": 0,
+    "seconds": 20.31,
+    "database": "guarded isolated PostgreSQL test database",
+    "runtime_role": "nonowner without superuser or BYPASSRLS",
+    "includes": ["identity and tenant isolation", "court and scorer races", "durable scoring and recovery", "ranking and playoffs", "strict rule validation", "reports and imports", "PDF and safe sponsor configuration"]
+  },
+  "javascript_syntax": {"modules": 6, "passed": 6},
+  "running_application": {
+    "url": "http://127.0.0.1:5050",
+    "liveness_http_status": 200,
+    "readiness_http_status": 200,
+    "readiness": "ready",
+    "web_workers": 2,
+    "threads_per_worker": 8,
+    "export_worker": "running",
+    "demo_preserved": true
+  },
+  "http_load_record": "load-validation.json",
+  "restore_record": "restore-validation.json",
+  "browser_review": "browser-review.md",
+  "pdf_visual_review": "report-pdf-review.json",
+  "production_readiness_claimed": false,
+  "remaining_launch_checks": "release-checklist.md"
+}
