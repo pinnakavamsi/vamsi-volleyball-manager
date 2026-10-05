@@ -26,6 +26,7 @@ class User(UserMixin, Record, Base):
     email = Column(String(254), unique=True, nullable=False)
     name = Column(String(120), nullable=False)
     password_hash = Column(Text, nullable=False)
+    password_change_required = Column(Boolean, default=False, server_default='false', nullable=False)
     active = Column(Boolean, default=True, nullable=False)
     platform_admin = Column(Boolean, default=False, nullable=False)
     mfa_secret = Column(Text)

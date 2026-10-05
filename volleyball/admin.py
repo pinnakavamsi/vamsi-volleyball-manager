@@ -2,19 +2,21 @@
 from __future__ import annotations
 
 import re
+import secrets
 from datetime import datetime
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Blueprint, g, request
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
+from werkzeug.security import generate_password_hash
 
-from .auth import (PERMISSIONS, deliver_pending_identity_emails, issue_token,
-    normalize_email, queue_identity_email, require_org, require_platform_admin,
+from .auth import (PERMISSIONS, issue_token,
+    normalize_email, require_org, require_platform_admin,
     scoped_tournament_ids, valid_id)
 from .common import APIError, audit, body, iso, now, serialize
 from .db import get_db, set_scope
-from .models import (Announcement, Court, CourtAssignment, Entry, Match, Membership,
+from .models import (Announcement, Audit, Court, CourtAssignment, Entry, Match, Membership,
     Organization, ScorerSession, Team, Token, Tournament, User, Venue)
 
 bp = Blueprint("admin", __name__, url_prefix="/api/v1")
@@ -153,7 +155,7 @@ def organization_current():
 def platform_organizations():
     db = get_db()
     if request.method == "GET":
-        return _paged(select(Organization).order_by(Organization.created_at.desc()))
+        return _paged(select(Organization).order_by(Organization.created_at.desc()), _platform_organization_json)
     data = body()
     name = text(data.get("name"), "Organization name")
     slug = str(data.get("slug") or re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-")).lower()
@@ -168,13 +170,135 @@ def platform_organizations():
     db.flush()
     set_scope(org.id)
     g.organization = org
-    member = _invite(email, "admin", [], data.get("admin_name"), org)
+    member, credentials = _invite(email, "admin", [], data.get("admin_name"), org)
     audit("platform.organization_provisioned", "organization", org.id,
           after={"name": org.name, "initial_membership_id": member.id}, reason="Platform organization provisioning")
     db.commit()
-    deliver_pending_identity_emails(db)
-    return {"organization": serialize(org), "membership": _membership_json(member),
-            "message": "Organization created. Its initial administrator invitation has been queued."}, 201
+    result = {"organization": serialize(org), "membership": _membership_json(member),
+              "invitation_delivery": _manual_invitation_delivery(credentials),
+              "message": "Organization created. Its initial administrator can accept the invitation after signing in."}
+    if credentials:
+        result["initial_credentials"] = credentials
+    return result, 201
+
+
+def _initial_administrator(org):
+    # The provisioning journal identifies the initial administrator exactly;
+    # later customer memberships are never targets of platform credential issuance.
+    set_scope(org.id)
+    event = get_db().scalar(select(Audit).where(Audit.organization_id == org.id,
+        Audit.action.in_(["platform.organization_provisioned", "platform.organization_administrator_provisioned"]),
+        Audit.entity_id == org.id).order_by(
+            case((Audit.action == "platform.organization_administrator_provisioned", 0), else_=1),
+            Audit.created_at.desc()).limit(1))
+    membership_id = (event.after or {}).get("initial_membership_id") if event else None
+    if not membership_id:
+        return None
+    return get_db().scalar(select(Membership).where(Membership.id == membership_id,
+        Membership.organization_id == org.id))
+
+
+def _platform_organization_json(org):
+    result = serialize(org)
+    result["can_setup_administrator"] = bool(org.active and not _independent_administrator_count(org.id))
+    member = _initial_administrator(org)
+    user = get_db().get(User, member.user_id) if member else None
+    result["initial_admin"] = ({"email": user.email, "name": user.name, "membership_id": member.id,
+        "status": member.status, "can_issue_credentials": bool(org.active and user.active
+            and member.role == "admin" and member.status == "invited" and not user.password_hash),
+        "can_renew_invitation": bool(org.active and user.active and member.role == "admin" and member.status == "invited")}
+        if member and user else None)
+    return result
+
+
+def _independent_administrator_count(organization_id):
+    return get_db().scalar(select(func.count()).select_from(Membership).join(User, User.id == Membership.user_id).where(
+        Membership.organization_id == organization_id, Membership.role == "admin",
+        Membership.status.in_(["active", "invited"]), User.platform_admin.is_(False))) or 0
+
+
+@bp.post("/platform/organizations/<organization_id>/administrator")
+@require_platform_admin
+def setup_organization_administrator(organization_id):
+    data, db = body(), get_db()
+    email = normalize_email(data.get("email"))
+    name = text(data.get("name"), "Administrator name", 120)
+    org = db.scalar(select(Organization).where(Organization.id == valid_id(organization_id))
+        .with_for_update(key_share=True).execution_options(populate_existing=True))
+    if not org or not org.active:
+        raise APIError("Organization not found or inactive.", 404, "not_found")
+    if _independent_administrator_count(org.id):
+        raise APIError("This organization already has an active or invited organization administrator. Its administrator manages additional staff.",
+                       409, "administrator_exists")
+    target = db.scalar(select(User).where(User.email == email).with_for_update().execution_options(populate_existing=True))
+    if target and target.platform_admin:
+        raise APIError("Use a separate organization staff account. Platform administrators manage organization setup and service health.",
+                       400, "platform_identity")
+    set_scope(org.id)
+    g.organization = org
+    member, credentials = _invite(email, "admin", [], name, org)
+    audit("platform.organization_administrator_provisioned", "organization", org.id,
+          after={"initial_membership_id": member.id, "user_id": member.user_id},
+          reason="Initial independent organization administrator setup")
+    db.commit()
+    result = {"membership": _membership_json(member), "invitation_delivery": _manual_invitation_delivery(credentials),
+              "message": "Organization administrator invited. They can sign in, choose a new password if required, and accept their workspace invitation."}
+    if credentials:
+        result["initial_credentials"] = credentials
+    return result, 201
+
+
+def _lock_initial_administrator(organization_id):
+    db = get_db()
+    org = db.scalar(select(Organization).where(Organization.id == valid_id(organization_id))
+        .with_for_update(key_share=True).execution_options(populate_existing=True))
+    if not org or not org.active:
+        raise APIError("Organization not found or inactive.", 404, "not_found")
+    member = _initial_administrator(org)
+    if not member:
+        raise APIError("This organization has no initial administrator awaiting credentials.", 409, "credentials_unavailable")
+    user = db.scalar(select(User).where(User.id == member.user_id)
+        .with_for_update().execution_options(populate_existing=True))
+    db.refresh(member, with_for_update=True)
+    if not user or not user.active or member.status != "invited" or member.role != "admin":
+        raise APIError("The original initial administrator is no longer awaiting an invitation.", 409, "invitation_unavailable")
+    return org, user, member
+
+
+@bp.post("/platform/organizations/<organization_id>/initial-admin-credentials")
+@require_platform_admin
+def initial_admin_credentials(organization_id):
+    db = get_db()
+    org, user, member = _lock_initial_administrator(organization_id)
+    if user.password_hash:
+        raise APIError("Credentials can only be issued once for a passwordless invited initial administrator. Existing credentials are preserved.",
+                       409, "credentials_unavailable")
+    member, credentials = _invite(user.email, "admin", [], user.name, org, allow_passwordless_initial=True)
+    g.organization = org
+    audit("platform.initial_admin_credentials_issued", "membership", member.id,
+          after={"user_id": user.id, "must_change_password": True}, reason="Manual initial credential handoff")
+    db.commit()
+    return {"membership": _membership_json(member), "initial_credentials": credentials,
+            "invitation_delivery": _manual_invitation_delivery(credentials),
+            "message": "Initial credentials created. Share them privately; the administrator must choose a new password."}, 201
+
+
+@bp.post("/platform/organizations/<organization_id>/initial-admin-invitation")
+@require_platform_admin
+def renew_initial_admin_invitation(organization_id):
+    db = get_db()
+    org, user, member = _lock_initial_administrator(organization_id)
+    member, credentials = _invite(user.email, "admin", [], user.name, org, allow_passwordless_initial=True)
+    g.organization = org
+    audit("platform.initial_admin_invitation_renewed", "membership", member.id,
+          after={"user_id": user.id, "must_change_password": bool(user.password_change_required)},
+          reason="Renewal for the original invited initial administrator")
+    db.commit()
+    result = {"membership": _membership_json(member), "invitation_delivery": _manual_invitation_delivery(credentials),
+              "message": "Invitation renewed. The initial administrator can sign in with their existing credentials and accept it."}
+    if credentials:
+        result["initial_credentials"] = credentials
+    return result, 201
 
 
 @bp.patch("/platform/organizations/<organization_id>")
@@ -216,14 +340,28 @@ def _membership_json(member):
     return result
 
 
-def _invite(email, role, scopes, name, org):
+def _invite(email, role, scopes, name, org, *, allow_passwordless_initial=False):
     db = get_db()
-    user = db.scalar(select(User).where(User.email == email))
+    db.scalar(select(Organization).where(Organization.id == org.id).with_for_update(key_share=True))
+    user = db.scalar(select(User).where(User.email == email).with_for_update().execution_options(populate_existing=True))
+    created = user is None
     if not user:
         user = User(email=email, name=text(name or email.split("@")[0], "Name", 120), password_hash="", active=True)
         db.add(user)
         db.flush()
-    member = db.scalar(select(Membership).where(Membership.organization_id == org.id, Membership.user_id == user.id).with_for_update())
+    elif not user.active:
+        raise APIError("This organizer identity is inactive. Contact the platform administrator.", 409, "inactive_identity")
+    credentials = None
+    if not user.password_hash:
+        if not created and not allow_passwordless_initial:
+            raise APIError("This organizer already has an identity awaiting initial credentials. Ask the platform administrator to issue credentials for their original organization first.",
+                           409, "initial_credentials_required")
+        temporary_password = secrets.token_urlsafe(24)
+        user.password_hash = generate_password_hash(temporary_password, method="scrypt")
+        user.password_change_required = True
+        credentials = {"email": user.email, "password": temporary_password, "must_change_password": True}
+    member = db.scalar(select(Membership).where(Membership.organization_id == org.id, Membership.user_id == user.id)
+        .with_for_update().execution_options(populate_existing=True))
     if member and member.status == "active":
         raise APIError("This organizer already belongs to the organization. Edit the existing membership.", 409, "conflict")
     if not member:
@@ -233,12 +371,18 @@ def _invite(email, role, scopes, name, org):
     member.invited_at, member.activated_at, member.suspended_at = now(), None, None
     db.flush()
     for previous in db.scalars(select(Token).where(Token.kind == "invitation", Token.organization_id == org.id,
-            Token.user_id == user.id, Token.used_at.is_(None), Token.revoked_at.is_(None))):
+            Token.user_id == user.id, Token.used_at.is_(None), Token.revoked_at.is_(None)).with_for_update()):
         previous.revoked_at = now()
-    token, raw = issue_token("invitation", user_id=user.id, organization_id=org.id,
-                            email=email, meta={"membership_id": member.id}, hours=72)
-    queue_identity_email(token, raw, f"Join {org.name} on Volleyball Manager", "/invite")
-    return member
+        previous.data = {key: value for key, value in (previous.data or {}).items() if key != "delivery"}
+    issue_token("invitation", user_id=user.id, organization_id=org.id,
+                email=email, meta={"membership_id": member.id, "delivery_status": "manual"}, hours=72)
+    return member, credentials
+
+
+def _manual_invitation_delivery(credentials):
+    return {"status": "manual", "mode": "manual", "message": (
+        "Share the initial credentials privately. The organizer must change the temporary password and then accept the invitation."
+        if credentials else "No email is sent. The existing organizer can sign in with their current credentials and accept the invitation.")}
 
 
 @bp.route("/memberships", methods=["GET", "POST"])
@@ -253,11 +397,14 @@ def memberships():
     scopes = _validate_tournament_scope(data.get("tournament_ids", []))
     if role == "admin" and scopes:
         raise APIError("Organization administrators need organization-wide access.")
-    member = _invite(normalize_email(data.get("email")), role, scopes, data.get("name"), g.organization)
+    member, credentials = _invite(normalize_email(data.get("email")), role, scopes, data.get("name"), g.organization)
     audit("membership.invited", "membership", member.id, after={"role": role, "tournament_ids": scopes})
     get_db().commit()
-    deliver_pending_identity_emails()
-    return {"membership": _membership_json(member), "message": "Invitation queued; membership activates on acceptance."}, 201
+    result = {"membership": _membership_json(member), "invitation_delivery": _manual_invitation_delivery(credentials),
+              "message": "Membership activates when the signed-in organizer accepts the invitation."}
+    if credentials:
+        result["initial_credentials"] = credentials
+    return result, 201
 
 
 @bp.patch("/memberships/<membership_id>")

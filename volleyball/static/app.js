@@ -52,7 +52,24 @@ const nav = [
   ["staff", "Organizer staff", "shield"],
   ["settings", "Settings", "settings"],
 ];
-const route = () => location.hash.slice(1) || "overview";
+const platformNav = [
+  ["platform", "Dashboard", "grid"],
+  ["platform-organizations", "Organizations", "team"],
+  ["platform-backups", "Backups", "download"],
+  ["platform-performance", "Performance", "chart"],
+  ["platform-health", "Service health", "shield"],
+];
+const platformMode = () => Boolean(identity?.user?.platform_admin);
+const route = () => {
+  const requested = location.hash.slice(1);
+  if (platformMode()) {
+    const page = requested.split("/")[0];
+    return [...platformNav.map(([id]) => id), "profile", "help", "more"].includes(page)
+      ? requested
+      : "platform";
+  }
+  return requested || "overview";
+};
 const can = (permission) =>
   org?.role === "admin" ||
   {
@@ -61,18 +78,164 @@ const can = (permission) =>
     results: ["results"],
   }[org?.role]?.includes(permission);
 function heading(title, subtitle, action = "") {
-  return `<div class="page-heading"><div><div class="eyebrow">${imageTag(org?.logo, org?.name + " logo")}${esc(org?.name || "PLATFORM WORKSPACE")}</div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${action}</div>`;
+  return `<div class="page-heading"><div><div class="eyebrow">${imageTag(org?.logo, org?.name + " logo")}${esc(org?.name || (platformMode() ? "PLATFORM ADMINISTRATION" : "WORKSPACE"))}</div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${action}</div>`;
 }
 function options(list, label = "name") {
   return list.map((r) => [r.id, r[label] || r.name || r.id]);
 }
 function organizationOptions() {
+  if (!identity.organizations.length)
+    return '<option value="">No active organization</option>';
   return identity.organizations
     .map(
       (o) =>
         `<option value="${esc(o.id)}" ${o.id === org?.id ? "selected" : ""}>${esc(o.name)}${o.demo ? " · Demo" : ""}</option>`,
     )
     .join("");
+}
+async function refreshIdentity() {
+  identity = await api("/auth/me", { publicRequest: true });
+  setContext(identity.csrf_token);
+  if (!identity.user) {
+    location.href = "/login";
+    return false;
+  }
+  if (identity.user.must_change_password) {
+    hideQR();
+    stopOrganizerRefresh();
+    requiredPasswordChange();
+    return false;
+  }
+  if (platformMode()) {
+    org = undefined;
+    setContext(null, "");
+    return true;
+  }
+  if (!org && identity.organizations.length) {
+    org = identity.organizations[0];
+    setContext(null, org.id);
+    dashboard = null;
+    tournament = null;
+    await loadOrganization();
+    await loadOrganizerPrefs();
+    shell();
+  }
+  return true;
+}
+function invitationsPanel() {
+  const invitations = items(identity.invitations);
+  if (!invitations.length) return "";
+  return `<section class="panel panel-pad section-gap"><h2>Organization invitations</h2><p class="muted small">${platformMode() ? "These invitations record organization membership. Your platform administrator account continues to use platform administration; organization staff manage their own workspace." : "Accept an invitation to open that organization's tournaments, teams, and settings."}</p><div class="notice-list">${invitations
+    .map(
+      (invitation) =>
+        `<div class="notice"><h3>${esc(invitation.organization.name)}</h3><p>${esc(pretty(invitation.role))} access · Expires ${esc(dt(invitation.expires_at))}</p>${invitation.requires_mfa && !identity.user.mfa_enabled ? '<p>This organization requires an authenticator. Set it up in Profile & security, then accept this invitation.</p><a class="button secondary section-gap" href="#profile">Set up authenticator</a>' : `<button type="button" class="button primary section-gap" data-accept-invitation="${esc(invitation.id)}" aria-label="Accept invitation to ${esc(invitation.organization.name)}">Accept invitation</button>`}</div>`,
+    )
+    .join("")}</div></section>`;
+}
+function bindInvitations() {
+  document.querySelectorAll("[data-accept-invitation]").forEach(
+    (button) =>
+      (button.onclick = () => acceptInvitation(button.dataset.acceptInvitation)),
+  );
+}
+function acceptInvitation(id) {
+  const invitation = items(identity.invitations).find((item) => item.id === id);
+  if (!invitation) return;
+  modal(
+    "Accept organization invitation",
+    `<p>Join <strong>${esc(invitation.organization.name)}</strong> as ${esc(pretty(invitation.role))} using ${esc(identity.user.email)}.</p>` +
+      (identity.user.mfa_enabled
+        ? field(
+            "otp",
+            "Authenticator or recovery code (if requested)",
+            "text",
+            "",
+            'autocomplete="one-time-code"',
+          )
+        : ""),
+    async (fd) => {
+      const result = await api(
+        `/auth/invitations/${encodeURIComponent(id)}/accept`,
+        {
+          method: "POST",
+          data: formObject(fd),
+          publicRequest: true,
+        },
+      );
+      identity = { ...identity, ...result };
+      setContext(result.csrf_token);
+      if (platformMode()) {
+        org = undefined;
+        setContext(null, "");
+        shell();
+        await render();
+        toast("Invitation accepted. Platform administration is ready.");
+      } else {
+        await switchOrg(invitation.organization.id);
+        toast(result.message || "Invitation accepted. Your workspace is ready.");
+      }
+    },
+    { submit: "Accept invitation" },
+  );
+}
+function showInitialCredentials(result) {
+  const credentials = result.initial_credentials;
+  if (!credentials) return;
+  setTimeout(() => {
+    modal(
+      "Share organizer sign-in details",
+      '<p>Save these details now and share them privately with the organizer. The temporary password is shown only once.</p>' +
+        `<p>Sign-in page: <a href="/login">${esc(location.origin)}/login</a></p><div class="auth-form">` +
+        field(
+          "initial_username",
+          "Username (email address)",
+          "text",
+          credentials.email,
+          'readonly autocomplete="off"',
+        ) +
+        field(
+          "initial_password",
+          "Temporary password",
+          "text",
+          credentials.password,
+          'readonly autocomplete="off"',
+        ) +
+        '</div><p class="form-help">The organizer signs in, chooses a new password, then accepts their organization invitation.</p>',
+      null,
+    );
+    document.querySelector("#dialog-cancel").textContent = "Done";
+  }, 0);
+}
+function requiredPasswordChange() {
+  setContext(null, "");
+  app.innerHTML = `<div class="auth-layout"><aside class="auth-brand"><span class="brand"><img src="/static/brand.svg" alt=""><span>Courtline<span class="product">VOLLEYBALL MANAGER</span></span></span><div><h1>Make your account yours.</h1><p>Choose a private password before entering your organizer workspace.</p></div>${credit()}</aside><main id="main" class="auth-main"><div class="auth-box"><span class="eyebrow">FIRST SIGN IN</span><h1>Change your temporary password</h1><p>Signed in as ${esc(identity.user.email)}. Use a new password with 12–256 characters.</p><form id="initial-password-form" class="auth-form">${field("current_password", "Temporary password", "password", "", 'required autocomplete="current-password"')}${field("password", "New password", "password", "", 'required minlength="12" maxlength="256" autocomplete="new-password"')}${field("confirm_password", "Confirm new password", "password", "", 'required minlength="12" maxlength="256" autocomplete="new-password"')}${identity.user.mfa_enabled ? field("otp", "Authenticator or recovery code", "text", "", 'required autocomplete="one-time-code"') : ""}<div class="form-error" role="alert" hidden></div><button class="button primary" type="submit">Save new password</button></form><button class="button ghost section-gap" id="initial-password-logout" type="button">Sign out</button></div>${credit()}</main></div>`;
+  document.querySelector("#initial-password-logout").onclick = async () => {
+    await api("/auth/logout", { method: "POST", publicRequest: true });
+    location.href = "/login";
+  };
+  document.querySelector("#initial-password-form").onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.target,
+      button = form.querySelector("[type=submit]"),
+      error = form.querySelector(".form-error"),
+      data = formObject(new FormData(form));
+    error.hidden = true;
+    if (data.password !== data.confirm_password) {
+      error.textContent = "The new passwords do not match.";
+      error.hidden = false;
+      return;
+    }
+    delete data.confirm_password;
+    button.disabled = true;
+    try {
+      await api("/auth/profile", { method: "POST", data, publicRequest: true });
+      location.href = "/";
+    } catch (err) {
+      error.innerHTML = errorText(err);
+      error.hidden = false;
+      button.disabled = false;
+    }
+  };
 }
 function applyBranding() {
   const color = /^#[0-9a-f]{6}$/i.test(org?.color || "")
@@ -92,8 +255,16 @@ async function loadOrganization() {
   applyBranding();
 }
 function shell() {
+  if (identity.user.must_change_password) {
+    requiredPasswordChange();
+    return;
+  }
   const active = route().split("/")[0];
-  app.innerHTML = `<div class="shell organizer-shell"><aside class="sidebar"><a href="#overview" class="brand"><img src="/static/brand.svg" alt=""><span>Courtline<span class="product">VOLLEYBALL MANAGER</span></span></a><select class="organization-picker" aria-label="Current organization">${organizationOptions()}</select><p class="nav-label">WORKSPACE</p><nav>${nav.map(([id, label, ic]) => `<a class="nav-item ${active === id ? "active" : ""}" href="#${id}">${icon(ic)}${label}</a>`).join("")}${identity.user.platform_admin ? `<a class="nav-item ${active === "platform" ? "active" : ""}" href="#platform">${icon("shield")}Platform administration</a>` : ""}</nav><div class="sidebar-bottom"><a class="nav-item ${active === "help" ? "active" : ""}" href="#help">${icon("help")}Help & about</a><a class="nav-item ${active === "profile" ? "active" : ""}" href="#profile">${icon("settings")}Profile & security</a><div class="sidebar-user"><span class="avatar">${esc((identity.user.name || identity.user.email).slice(0, 2).toUpperCase())}</span><div><strong>${esc(identity.user.name || "Organizer")}</strong><small>${esc(pretty(org?.role || "platform_admin"))}</small></div><button class="icon-button" id="logout" aria-label="Sign out" style="color:#afc5b8;margin-left:auto">${icon("logout")}</button></div></div></aside><div class="workspace"><header class="topbar"><div class="breadcrumb">Workspace <span>/</span><span id="breadcrumb">${esc(nav.find((n) => n[0] === active)?.[1] || pretty(active))}</span></div><select class="mobile-org" aria-label="Current organization">${organizationOptions()}</select><div class="header-actions"><label class="search-box">${icon("search")}<input id="global-search" placeholder="Find a tournament…" aria-label="Search tournaments"><kbd>⌘ K</kbd></label><button class="icon-button" id="toggle-theme" aria-label="Toggle light or dark theme">${icon("sun")}</button><button class="icon-button notification-button" id="notifications" aria-label="View notifications">${icon("bell")}</button><a href="#profile" class="avatar" aria-label="Profile">${esc((identity.user.name || "OR").slice(0, 2).toUpperCase())}</a></div></header><main id="main" class="main-content" tabindex="-1"><div class="loading-bar"></div></main>${credit()}</div><nav class="mobile-nav" aria-label="Mobile workspace navigation">${[nav[0], nav[1], nav[2], nav[3], ["more", "More", "menu"]].map(([id, label, ic]) => `<a href="#${id}" class="${active === id ? "active" : ""}">${icon(ic)}<span>${id === "overview" ? "Home" : label}</span></a>`).join("")}</nav></div>`;
+  const platform = platformMode(),
+    navigation = platform ? platformNav : nav,
+    mobileNavigation = [...navigation.slice(0, 4), ["more", "More", "menu"]],
+    home = platform ? "platform" : "overview";
+  app.innerHTML = `<div class="shell organizer-shell ${platform ? "platform-shell" : ""}"><aside class="sidebar"><a href="#${home}" class="brand"><img src="/static/brand.svg" alt=""><span>Courtline<span class="product">VOLLEYBALL MANAGER</span></span></a>${platform ? "" : `<select class="organization-picker" aria-label="Current organization" ${identity.organizations.length ? "" : "disabled"}>${organizationOptions()}</select>`}<p class="nav-label">${platform ? "PLATFORM ADMINISTRATION" : "WORKSPACE"}</p><nav>${navigation.map(([id, label, ic]) => `<a class="nav-item ${active === id ? "active" : ""}" href="#${id}">${icon(ic)}${label}</a>`).join("")}</nav><div class="sidebar-bottom"><a class="nav-item ${active === "help" ? "active" : ""}" href="#help">${icon("help")}Help & about</a><a class="nav-item ${active === "profile" ? "active" : ""}" href="#profile">${icon("settings")}Profile & security</a><div class="sidebar-user"><span class="avatar">${esc((identity.user.name || identity.user.email).slice(0, 2).toUpperCase())}</span><div><strong>${esc(identity.user.name || "Organizer")}</strong><small>${platform ? "Platform administrator" : esc(pretty(org?.role || "organizer"))}</small></div><button class="icon-button" id="logout" aria-label="Sign out" style="color:#afc5b8;margin-left:auto">${icon("logout")}</button></div></div></aside><div class="workspace"><header class="topbar"><div class="breadcrumb">${platform ? "Platform" : "Workspace"} <span>/</span><span id="breadcrumb">${esc(navigation.find((n) => n[0] === active)?.[1] || pretty(active))}</span></div>${platform ? "" : `<select class="mobile-org" aria-label="Current organization" ${identity.organizations.length ? "" : "disabled"}>${organizationOptions()}</select>`}<div class="header-actions">${platform ? "" : `<label class="search-box">${icon("search")}<input id="global-search" placeholder="Find a tournament…" aria-label="Search tournaments"><kbd>⌘ K</kbd></label>`}<button class="icon-button" id="toggle-theme" aria-label="Toggle light or dark theme">${icon("sun")}</button>${platform ? "" : `<button class="icon-button notification-button" id="notifications" aria-label="View notifications">${icon("bell")}</button>`}<a href="#profile" class="avatar" aria-label="Profile">${esc((identity.user.name || "OR").slice(0, 2).toUpperCase())}</a></div></header><main id="main" class="main-content" tabindex="-1"><div class="loading-bar"></div></main>${credit()}</div><nav class="mobile-nav" aria-label="${platform ? "Mobile platform navigation" : "Mobile workspace navigation"}">${mobileNavigation.map(([id, label, ic]) => `<a href="#${id}" class="${active === id ? "active" : ""}">${icon(ic)}<span>${id === "overview" || id === "platform" ? "Home" : label}</span></a>`).join("")}</nav></div>`;
   document
     .querySelectorAll(".organization-picker,.mobile-org")
     .forEach((s) => (s.onchange = () => switchOrg(s.value)));
@@ -103,8 +274,10 @@ function shell() {
   };
   document.querySelector("#toggle-theme").onclick = () =>
     theme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
-  document.querySelector("#notifications").onclick = showNotifications;
-  document.querySelector("#global-search").onkeydown = (e) => {
+  const notifications = document.querySelector("#notifications"),
+    search = document.querySelector("#global-search");
+  if (notifications) notifications.onclick = showNotifications;
+  if (search) search.onkeydown = (e) => {
     if (e.key === "Enter") {
       location.hash = "tournaments";
       setTimeout(() => {
@@ -118,6 +291,13 @@ function shell() {
   };
 }
 async function switchOrg(id) {
+  if (platformMode()) {
+    org = undefined;
+    setContext(null, "");
+    shell();
+    await render();
+    return;
+  }
   hideQR();
   org = identity.organizations.find((o) => o.id === id);
   setContext(null, id);
@@ -145,16 +325,27 @@ export async function start() {
     location.href = "/login";
     return;
   }
-  let stored;
-  try {
-    stored = localStorage.getItem("courtline-org");
-  } catch {}
-  org =
-    identity.organizations.find((o) => o.id === stored) ||
-    identity.organizations[0];
-  setContext(null, org?.id || "");
-  await loadOrganization();
-  await loadOrganizerPrefs();
+  if (identity.user.must_change_password) {
+    requiredPasswordChange();
+    return;
+  }
+  if (platformMode()) {
+    org = undefined;
+    setContext(null, "");
+    if (route() === "platform")
+      history.replaceState(null, "", location.pathname + location.search + "#platform");
+  } else {
+    let stored;
+    try {
+      stored = localStorage.getItem("courtline-org");
+    } catch {}
+    org =
+      identity.organizations.find((o) => o.id === stored) ||
+      identity.organizations[0];
+    setContext(null, org?.id || "");
+    await loadOrganization();
+    await loadOrganizerPrefs();
+  }
   shell();
   window.addEventListener("hashchange", () => {
     hideQR();
@@ -176,29 +367,53 @@ async function render() {
   const token = ++routeToken;
   stopOrganizerRefresh();
   const r = route();
-  const main = document.querySelector("#main");
+  let main = document.querySelector("#main");
   try {
+    if (identity.user.must_change_password) {
+      requiredPasswordChange();
+      return;
+    }
     if (
+      !platformMode() &&
       !org &&
       r !== "platform" &&
       r !== "profile" &&
       r !== "help" &&
       r !== "more"
     ) {
+      if (!(await refreshIdentity()) || token !== routeToken) return;
+      if (org) {
+        await render();
+        return;
+      }
+      const destination = nav.find(([id]) => r.split("/")[0] === id)?.[1];
       main.innerHTML =
         heading(
           "Welcome to Courtline",
-          "Your global organizer identity is ready.",
+          destination
+            ? `Accept an organization invitation to open ${destination}.`
+            : "Accept an organization invitation to open your workspace.",
+          identity.user.platform_admin
+            ? '<a class="button secondary" href="#platform">Provision organization</a>'
+            : "",
         ) +
-        empty(
-          "No organization memberships",
-          "A platform administrator can provision an organization and invite you to its workspace.",
-        );
+        (items(identity.invitations).length
+          ? invitationsPanel()
+          : empty(
+              "No active organization memberships",
+              identity.user.platform_admin
+                ? "Provision an organization with your email as its initial administrator, then accept the invitation."
+                : "Ask an organization administrator to add your email address. Your invitation will appear here.",
+            ));
+      main.focus({ preventScroll: true });
+      bindInvitations();
       return;
     }
     const [page, id, tab] = r.split("/");
     let html;
-    if (page === "overview") html = await overview();
+    if (platformMode() && platformNav.some(([name]) => name === page))
+      html = await platformPage(page);
+    else if (page === "overview") html = await overview();
     else if (page === "tournaments")
       html = id
         ? await eventPage(id, tab || "overview")
@@ -218,7 +433,8 @@ async function render() {
         "Page not found",
         "Choose a destination from the workspace navigation.",
       );
-    if (token !== routeToken) return;
+    if (token !== routeToken || !identity.user || identity.user.must_change_password) return;
+    main = document.querySelector("#main");
     main.innerHTML = html;
     main.focus({ preventScroll: true });
     bindPage(page, id, tab);
@@ -887,12 +1103,16 @@ async function settingsPage() {
   );
 }
 async function profilePage() {
+  if (!(await refreshIdentity())) return "";
   const sessions = items(await api("/auth/sessions"));
   return (
     heading(
       "Profile & security",
-      "Manage your global organizer identity and signed-in devices.",
+      platformMode()
+        ? "Manage your platform administrator account and signed-in devices."
+        : "Manage your global organizer identity and signed-in devices.",
     ) +
+    invitationsPanel() +
     `<div class="split"><section class="panel panel-pad"><h2>Your profile</h2><form id="profile-form" class="auth-form">${field("name", "Display name", "text", identity.user.name, "required")}${field("email", "Email address", "email", identity.user.email, "readonly")}<button class="button primary">Save profile</button></form><h2 class="section-gap">Multi-factor authentication</h2><p class="muted small">${identity.user.mfa_enabled ? "MFA is enabled for this identity." : "Use an authenticator app to protect administrator access."}</p>${badge(identity.user.mfa_enabled ? "enabled" : "disabled")}${!identity.user.mfa_enabled ? '<button class="button secondary section-gap" id="mfa-setup">Set up authenticator</button>' : '<div class="button-group section-gap"><button class="button secondary" id="mfa-replace">Replace authenticator</button><button class="button secondary" id="mfa-recovery">Replace recovery codes</button><button class="button secondary" id="mfa-disable">Disable MFA</button></div>'}<h2 class="section-gap">Change password</h2><form id="password-form" class="auth-form">${field("current_password", "Current password", "password", "", 'required autocomplete="current-password"')}${field("password", "New password", "password", "", 'required minlength="12" autocomplete="new-password"')}${identity.user.mfa_enabled ? field("otp", "Authenticator or recovery code", "text", "", "required") : ""}<button class="button secondary">Update password</button></form></section><section class="panel"><header class="panel-heading"><h2>Signed-in devices</h2></header>${table(
       [
         {
@@ -912,52 +1132,178 @@ async function profilePage() {
     )}</section></div>`
   );
 }
-async function platformPage() {
-  const [organizations, operations] = await Promise.all([
-    api("/platform/organizations"),
-    api("/operations"),
-  ]);
+function platformRefreshAction(extra = "") {
+  return `<div class="button-group">${extra}<button type="button" class="button secondary" data-refresh-platform>${icon("refresh")}Refresh snapshot</button></div>`;
+}
+function platformSnapshot(operations) {
+  return `<p class="muted small">Snapshot recorded ${esc(dt(operations.generated_at))}. Refresh to see the latest measurements.</p>`;
+}
+function measuredCount(value) {
+  return Number.isFinite(value) ? new Intl.NumberFormat().format(value) : "Not available";
+}
+function measuredBytes(value) {
+  if (!Number.isFinite(value)) return "Not available";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value)} ${units[unit]}`;
+}
+function operationRows(rows) {
+  return table(
+    [
+      { label: "Measure", key: "label" },
+      { label: "Current value", key: "value" },
+      { label: "Details", key: "details" },
+    ],
+    rows.map(([label, value, details = ""]) => ({ label, value, details })),
+  );
+}
+function platformOrganizationsTable(organizations) {
+  return `<section class="panel">${table(
+    [
+      { label: "Organization", key: "name" },
+      { label: "Slug", key: "slug" },
+      { label: "Timezone", key: "timezone" },
+      {
+        label: "Organization administrator",
+        render: (o) =>
+          o.initial_admin
+            ? `${esc(o.initial_admin.email)}<br>${badge(o.initial_admin.status)}`
+            : "Not assigned",
+      },
+      { label: "State", render: (o) => badge(o.active ? "active" : "suspended") },
+      { label: "Data", render: (o) => badge(o.demo ? "demo" : "organization") },
+      {
+        label: "Access setup",
+        render: (o) =>
+          o.can_setup_administrator
+            ? `<button type="button" class="row-action" data-setup-organization-administrator="${esc(o.id)}" data-organization-name="${esc(o.name)}">Set up organization administrator</button>`
+            : o.initial_admin?.can_issue_credentials
+              ? `<button type="button" class="row-action" data-issue-initial-credentials="${esc(o.id)}" data-admin-email="${esc(o.initial_admin.email)}">Generate initial sign-in details</button>`
+              : o.initial_admin?.can_renew_invitation
+                ? `<button type="button" class="row-action" data-renew-initial-invitation="${esc(o.id)}" data-admin-email="${esc(o.initial_admin.email)}">Renew invitation</button>`
+                : "",
+      },
+    ],
+    items(organizations),
+    { emptyText: "No organizations yet. Provision your first organization to get started." },
+  )}</section>`;
+}
+async function platformPage(page = "platform") {
+  if (!(await refreshIdentity())) return "";
+  const provision = '<button type="button" class="button primary" data-create="organization">' + icon("plus") + "Provision organization</button>";
+  if (page === "platform-organizations") {
+    const organizations = await api("/platform/organizations", { publicRequest: true });
+    return heading(
+      "Organizations",
+      "Create organization workspaces and set up their own administrators.",
+      platformRefreshAction(provision),
+    ) + platformOrganizationsTable(organizations);
+  }
+  const operations = await api("/operations", { publicRequest: true }),
+    service = operations.service || {},
+    performance = operations.performance || {},
+    database = performance.database || {},
+    pool = operations.database_pool || {},
+    storage = operations.private_storage || {},
+    backup = operations.backup || {},
+    jobs = operations.jobs || {},
+    snapshot = platformSnapshot(operations);
+  if (page === "platform-backups")
+    return heading(
+      "Backups & recovery",
+      "Review recorded backup status and recovery readiness.",
+      platformRefreshAction(),
+    ) + snapshot +
+      `<div class="metric-grid">${metric("Backup status", pretty(backup.status || "unavailable"), "Recorded by the backup operator", "download")}${metric("Last successful backup", backup.last_success_at ? dt(backup.last_success_at) : "Not recorded", "A completed package recorded in backup monitoring", "clock")}${metric("Continuous archive", pretty(backup.wal_archive?.status || "not_configured"), "WAL archive monitoring status", "shield")}${metric("Recovery targets", operations.recovery_targets?.measured ? "Measured" : "Not measured", "Data loss and restore time need validation", "chart")}</div>` +
+      `<section class="panel panel-pad"><h2>${backup.status === "not_configured" ? "Backup setup required" : "Backup monitoring"}</h2><p>${esc(backup.message || "Backup monitoring is unavailable.")}</p><p class="muted small">An operator must configure encrypted storage separate from this server, a backup schedule, and restore checks. Backup execution uses protected operator access.</p></section><section class="panel section-gap">${operationRows([
+        ["Backup package type", backup.type || "Not recorded"],
+        ["Current database archive mode", backup.current_archive_mode || "Not recorded"],
+        ["Recent archive recorded", backup.pitr_enabled ? "Yes" : "No", "Based on current archive mode and a recent successful operator status record. Restore validation is separate."],
+        ["Last WAL archive", backup.wal_archive?.last_archived_at ? dt(backup.wal_archive.last_archived_at) : "Not recorded"],
+        ["Proposed data loss target", `${operations.recovery_targets?.proposed_rpo_minutes ?? "—"} minutes`, "Target only; confirm through backup and recovery validation."],
+        ["Proposed restore time target", `${operations.recovery_targets?.proposed_rto_minutes ?? "—"} minutes`, "Target only; confirm through an isolated restore exercise."],
+      ])}</section>`;
+  if (page === "platform-performance")
+    return heading(
+      "Performance",
+      "Current database measurements and cumulative activity counters.",
+      platformRefreshAction(),
+    ) + snapshot +
+      `<div class="metric-grid">${metric("Database round trip", Number.isFinite(performance.database_round_trip_ms) ? `${performance.database_round_trip_ms} ms` : "Not available", "One SELECT 1 measurement from this request", "clock")}${metric("Database connections", measuredCount(database.connections), "All connected backends, including idle connections", "grid")}${metric("Application pool usage", Number.isFinite(pool.utilization_percent) ? `${pool.utilization_percent}%` : "Not available", "Connections in the current application process", "chart")}${metric("Database size", measuredBytes(database.size_bytes), "Current database storage usage", "download")}</div>` +
+      `<section class="panel panel-pad"><h2>Measurement scope</h2><p>${esc(performance.measurement || "A historical performance series has not been configured.")}</p><p class="muted small">${esc(operations.monitoring || "Historical monitoring and alerts require configuration.")}</p></section><section class="panel section-gap">${operationRows([
+        ["Committed transactions", measuredCount(database.transactions_committed), "Cumulative since database statistics reset."],
+        ["Database transaction rollbacks", measuredCount(database.transactions_rolled_back), "Cumulative since database statistics reset. Includes read-only transaction cleanup; this is not an application error count."],
+        ["Deadlocks", measuredCount(database.deadlocks), "Cumulative since database statistics reset."],
+        ["Statistics reset", database.stats_reset_at ? dt(database.stats_reset_at) : "Not recorded"],
+        ["Configured application pool size", measuredCount(pool.size), "Current application process only."],
+        ["Checked-out connections", measuredCount(pool.checked_out), "Current application process only."],
+        ["Current pool overflow", Number.isFinite(pool.overflow) ? measuredCount(Math.max(0, pool.overflow)) : "Not available", "Additional open connections beyond the configured pool size."],
+        ["Free application storage", measuredBytes(storage.free_bytes), "Filesystem used for private application files."],
+        ["Total application storage", measuredBytes(storage.total_bytes), "Filesystem used for private application files."],
+      ])}</section>`;
+  if (page === "platform-health")
+    return heading(
+      "Service health",
+      "Application readiness, database connectivity, and background processing.",
+      platformRefreshAction(),
+    ) + snapshot +
+      `<div class="metric-grid">${metric("Service readiness", pretty(service.status || "unavailable"), "Current application and database checks", "shield")}${metric("Background jobs pending", operations.jobs ? measuredCount((jobs.queued || 0) + (jobs.running || 0)) : "Not available", "Queued or running background jobs", "clock")}${metric("Pending events", measuredCount(operations.outbox?.pending), "Committed events awaiting publication", "refresh")}${metric("Free application storage", measuredBytes(storage.free_bytes), "Private files filesystem", "download")}</div>` +
+      `<section class="panel panel-pad"><h2>Readiness checks</h2><p class="muted small">${esc(service.checks || "Readiness checks are unavailable.")}</p></section><section class="panel section-gap">${operationRows([
+        ["Application", pretty(service.application || "unavailable"), "This authenticated application request."],
+        ["Database", pretty(service.database || "unavailable"), "Database connection check."],
+        ["Schema", pretty(service.schema || "unavailable"), "Migration revision and row security checks."],
+        ["Runtime database permissions", service.runtime_role === "unsafe" ? "Unsafe" : service.status === "ready" ? "Validated" : "Not ready", "Runtime role must preserve database isolation."],
+        ["Oldest pending event", operations.outbox?.oldest_pending_at ? dt(operations.outbox.oldest_pending_at) : "None recorded"],
+        ["Backup monitoring", pretty(backup.status || "unavailable"), "Review Backups for recovery configuration."],
+      ])}</section><section class="panel section-gap"><header class="panel-heading"><h2>Background jobs</h2></header>${table(
+        [{ label: "State", render: (row) => badge(row.status) }, { label: "Count", key: "count" }],
+        Object.entries(jobs).map(([status, count]) => ({ status, count })),
+        { emptyText: "No background jobs recorded." },
+      )}</section>`;
   return (
     heading(
-      "Platform administration",
-      "Provision organizations and review restricted service health.",
-      `<button class="button primary" data-create="organization">${icon("plus")}Provision organization</button>`,
+      "Platform dashboard",
+      "Manage organizations and keep the application service ready.",
+      platformRefreshAction(provision),
     ) +
-    `<section class="panel">${table(
-      [
-        { label: "Organization", key: "name" },
-        { label: "Slug", key: "slug" },
-        { label: "Timezone", key: "timezone" },
-        {
-          label: "State",
-          render: (o) => badge(o.active ? "active" : "suspended"),
-        },
-        {
-          label: "Data",
-          render: (o) => badge(o.demo ? "demo" : "organization"),
-        },
-      ],
-      items(organizations),
-    )}</section><section class="panel panel-pad section-gap"><h2>Service health & operations</h2><p class="muted small">Platform administration does not grant membership or access to private customer tournaments.</p><div class="notice-list">${Object.entries(
-      operations,
-    )
-      .map(
-        ([k, v]) =>
-          `<div class="notice"><strong>${esc(pretty(k))}</strong><pre>${esc(typeof v === "object" ? JSON.stringify(v, null, 2) : v)}</pre></div>`,
-      )
-      .join("")}</div></section>`
+    snapshot +
+    `<div class="metric-grid">${metric("Organizations", measuredCount(operations.organizations), "Registered organization workspaces", "team")}${metric("Service readiness", pretty(service.status || "unavailable"), "Application, database, and schema checks", "shield")}${metric("Backup status", pretty(backup.status || "unavailable"), "Recorded backup monitoring state", "download")}${metric("Database round trip", Number.isFinite(performance.database_round_trip_ms) ? `${performance.database_round_trip_ms} ms` : "Not available", "Current request measurement", "clock")}</div>` +
+    `<div class="record-grid">${[
+      ["platform-organizations", "Organizations", "Create workspaces and share administrator sign-in details.", "team"],
+      ["platform-backups", "Backups & recovery", "Review backup monitoring and recovery setup.", "download"],
+      ["platform-performance", "Performance", "Inspect database samples and cumulative counters.", "chart"],
+      ["platform-health", "Service health", "Review readiness and background processing.", "shield"],
+    ].map(([id, title, description, ic]) => `<a class="panel record-card" href="#${id}">${icon(ic)}<h2>${title}</h2><p>${description}</p></a>`).join("")}</div>` +
+    (backup.status === "not_configured" || backup.status === "unavailable" || backup.status === "stale"
+      ? `<section class="panel panel-pad section-gap"><h2>Backup attention required</h2><p>${esc(backup.message || "Review backup monitoring and configuration.")}</p><a class="button secondary" href="#platform-backups">Review backups</a></section>`
+      : "")
   );
 }
 function morePage() {
+  const navigation = platformMode() ? platformNav : nav.slice(4);
   return (
     heading(
-      "Workspace navigation",
+      platformMode() ? "Platform navigation" : "Workspace navigation",
       "Choose an administration or data destination.",
     ) +
-    `<div class="record-grid">${[...nav.slice(4), ["profile", "Profile & security", "shield"], ["help", "Help & about", "help"], ...(identity.user.platform_admin ? [["platform", "Platform administration", "shield"]] : [])].map(([id, label, ic]) => `<a class="panel record-card" href="#${id}">${icon(ic)}<h2>${label}</h2></a>`).join("")}</div>`
+    `<div class="record-grid">${[...navigation, ["profile", "Profile & security", "shield"], ["help", "Help & about", "help"]].map(([id, label, ic]) => `<a class="panel record-card" href="#${id}">${icon(ic)}<h2>${label}</h2></a>`).join("")}</div>`
   );
 }
 function helpPage() {
+  if (platformMode())
+    return heading("Platform help", "Organization setup, account security, and service operations.") +
+      `<div class="help-grid">${[
+        ["Organization administrators", "Provision an organization with a separate organization administrator email. Share the temporary sign-in details privately. The administrator changes their password and accepts the organization invitation."],
+        ["Existing organizations", "Use Set up organization administrator when an organization has no staff administrator. Existing organizers keep their current password. Renew invitation provides a fresh invitation when the previous one expired."],
+        ["Platform account", "This account manages organizations and application health. Organization staff use their own organizer accounts to run competitions. Protect platform access with an authenticator in Profile & security."],
+        ["Backup readiness", "Backups shows recorded operator status. Configure encrypted storage separate from the server, scheduled backups, continuous archiving where required, and an isolated restore check before relying on recovery targets."],
+        ["Performance measurements", "Database round trip is one current SELECT 1 sample. Database transaction and deadlock counters are cumulative since the statistics reset. Historical monitoring and alerts require configuration."],
+        ["Application credit", "Designed and developed by Vamsi Pinnaka."],
+      ].map(([title, description]) => `<section class="panel help-card"><h2>${esc(title)}</h2><p>${esc(description)}</p></section>`).join("")}</div>`;
   return (
     heading(
       "Help & about",
@@ -1005,6 +1351,64 @@ function helpPage() {
   );
 }
 function bindPage(page, id, tab) {
+  bindInvitations();
+  document.querySelectorAll("[data-refresh-platform]").forEach(
+    (button) => (button.onclick = render),
+  );
+  document.querySelectorAll("[data-setup-organization-administrator]").forEach(
+    (button) =>
+      (button.onclick = () => modal(
+        "Set up organization administrator",
+        `<p>Create an organization staff administrator for <strong>${esc(button.dataset.organizationName)}</strong>. Use a separate account from the platform administrator.</p>` +
+          field("email", "Organization administrator email", "email", "", 'required autocomplete="off"') +
+          field("name", "Organization administrator name", "text", "", 'required maxlength="120"'),
+        async (fd) => {
+          const result = await api(
+            `/platform/organizations/${encodeURIComponent(button.dataset.setupOrganizationAdministrator)}/administrator`,
+            { method: "POST", data: formObject(fd), publicRequest: true },
+          );
+          showInitialCredentials(result);
+          toast(result.message || "Organization administrator set up. Share their sign-in details privately.");
+          await render();
+        },
+        { submit: "Set up administrator" },
+      )),
+  );
+  document.querySelectorAll("[data-renew-initial-invitation]").forEach(
+    (button) =>
+      (button.onclick = () =>
+        modal(
+          "Renew initial administrator invitation",
+          `<p>Create a fresh invitation for ${esc(button.dataset.adminEmail)}. Their current password stays the same; they can accept the invitation after signing in.</p>`,
+          async () => {
+            const result = await api(
+              `/platform/organizations/${encodeURIComponent(button.dataset.renewInitialInvitation)}/initial-admin-invitation`,
+              { method: "POST", data: {} },
+            );
+            showInitialCredentials(result);
+            toast(result.message || "Invitation renewed. The administrator can accept it after signing in.");
+            await render();
+          },
+          { submit: "Renew invitation" },
+        )),
+  );
+  document.querySelectorAll("[data-issue-initial-credentials]").forEach(
+    (button) =>
+      (button.onclick = () =>
+        modal(
+          "Generate initial sign-in details",
+          `<p>Create a temporary password for ${esc(button.dataset.adminEmail)}. Save the returned details and share them privately with this organizer.</p>`,
+          async () => {
+            const result = await api(
+              `/platform/organizations/${encodeURIComponent(button.dataset.issueInitialCredentials)}/initial-admin-credentials`,
+              { method: "POST", data: {} },
+            );
+            showInitialCredentials(result);
+            await render();
+          },
+          { submit: "Generate sign-in details" },
+        )),
+  );
   document
     .querySelectorAll("[data-create]")
     .forEach((b) => (b.onclick = () => createRecord(b.dataset.create)));
@@ -1441,7 +1845,7 @@ async function createRecord(type) {
     return modal(
       "Provision organization",
       field("name", "Organization name", "text", "", "required") +
-        field("slug", "URL slug", "text", "", 'required pattern="[a-z0-9-]+"') +
+        field("slug", "URL slug", "text", "", 'required pattern="[a-z0-9][a-z0-9-]{1,119}" maxlength="120"') +
         field(
           "timezone",
           "IANA timezone",
@@ -1451,23 +1855,31 @@ async function createRecord(type) {
         ) +
         field(
           "admin_email",
-          "Initial administrator email",
+          "Organization administrator email",
           "email",
           "",
           "required",
         ) +
-        field("admin_name", "Administrator name"),
+        field(
+          "admin_name",
+          "Organization administrator name",
+          "text",
+          "",
+          'required maxlength="120"',
+        ) +
+        '<p class="form-help">A URL slug identifies the organization using lowercase letters, numbers, and hyphens, for example strive-volleyball.</p><p class="form-help">Use a separate organization staff account. Your platform account manages organization setup and service health. Share new organizers’ temporary sign-in details privately; existing organizers keep their current password.</p>',
       async (fd) => {
         const r = await api("/platform/organizations", {
           method: "POST",
           data: formObject(fd),
         });
         toast(
-          r.delivery_mode === "console"
-            ? "Organization created. Invitation delivery is recorded by the configured local adapter."
-            : "Organization provisioned.",
+          r.message || "Organization created. Its administrator can accept the invitation after signing in.",
         );
-        render();
+        showInitialCredentials(r);
+        await refreshIdentity();
+        if (platformMode()) location.hash = "platform-organizations";
+        await render();
       },
     );
   return recordForm(type);
@@ -1678,17 +2090,16 @@ async function inviteStaff() {
         "viewer",
       ) +
       tournamentAssignments(ts) +
-      '<p class="form-help">Existing identities retain all other memberships. New identities accept a scoped invitation.</p>',
+      '<p class="form-help">New organizers receive temporary sign-in details to share privately. Existing organizers keep their current password and other memberships. They accept this organization invitation after signing in.</p>',
     async (fd) => {
       const v = formObject(fd);
       v.tournament_ids = fd.getAll("tournament_ids");
       const r = await api("/memberships", { method: "POST", data: v });
       toast(
-        r.delivery_mode === "console"
-          ? "Invitation recorded by the configured local delivery adapter."
-          : "Organizer invitation created.",
+        r.message || "Organizer invitation created. The organizer can accept it after signing in.",
       );
-      render();
+      showInitialCredentials(r);
+      await render();
     },
     { submit: "Invite organizer" },
   );

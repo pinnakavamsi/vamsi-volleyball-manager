@@ -18,7 +18,7 @@ import pyotp
 from cryptography.fernet import Fernet, InvalidToken
 from flask import Blueprint, current_app, g, request, session
 from flask_login import LoginManager, current_user, login_user, logout_user
-from sqlalchemy import func, select, text as sql_text
+from sqlalchemy import String, cast, func, select, text as sql_text
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .common import APIError, audit, body, iso, now, uuid_str
@@ -94,6 +94,7 @@ def user_json(user):
     return {
         "id": user.id, "email": user.email, "name": user.name,
         "platform_admin": bool(user.platform_admin), "mfa_enabled": bool(user.mfa_enabled),
+        "must_change_password": bool(user.password_change_required),
     }
 
 
@@ -143,6 +144,8 @@ def require_login(view):
         if not current_user.is_authenticated:
             raise APIError("Sign in to continue.", 401, "unauthenticated")
         g.user = current_user._get_current_object()
+        if g.user.password_change_required and request.endpoint not in {"auth.profile", "auth.logout"}:
+            raise APIError("Change your temporary password before using your workspace.", 403, "password_change_required")
         return view(*args, **kwargs)
     return wrapped
 
@@ -280,14 +283,41 @@ def _memberships_for(user):
             for m, o in rows]
 
 
+def _pending_invitations_for(user):
+    """Return only the signed-in identity's usable invitations, without delivery secrets."""
+    if not user:
+        return []
+    rows = get_db().execute(select(Membership, Organization, Token).join(
+        Organization, Organization.id == Membership.organization_id
+    ).join(Token, (Token.organization_id == Membership.organization_id)
+           & (Token.user_id == Membership.user_id)
+           & (Token.data["membership_id"].astext == cast(Membership.id, String))).where(
+        Membership.user_id == user.id, Membership.status == "invited", Organization.active.is_(True),
+        Token.kind == "invitation", Token.used_at.is_(None), Token.revoked_at.is_(None),
+        Token.expires_at > now(),
+    ).order_by(Membership.invited_at.desc(), Token.expires_at.desc())).all()
+    invitations, seen = [], set()
+    for member, organization, token in rows:
+        if member.id in seen:
+            continue
+        seen.add(member.id)
+        invitations.append({"id": member.id,
+            "organization": {"id": organization.id, "name": organization.name, "slug": organization.slug},
+            "role": member.role, "expires_at": iso(token.expires_at),
+            "requires_mfa": bool((organization.settings or {}).get("require_mfa")),
+            "delivery_status": (token.data or {}).get("delivery_status", "manual")})
+    return invitations
+
+
 @bp.get("/me")
 def me():
     user = current_user._get_current_object() if current_user.is_authenticated else None
     organizations = _memberships_for(user) if user else []
+    invitations = _pending_invitations_for(user)
     if user:
         get_db().commit()
     return {"user": user_json(user) if user else None,
-            "organizations": organizations, "csrf_token": csrf_token()}
+            "organizations": organizations, "invitations": invitations, "csrf_token": csrf_token()}
 
 
 @bp.post("/login")
@@ -307,7 +337,8 @@ def login():
     _new_session(user)
     audit("identity.login", "user", user.id)
     db.commit()
-    return {"user": user_json(user), "organizations": _memberships_for(user), "csrf_token": csrf_token()}
+    return {"user": user_json(user), "organizations": _memberships_for(user),
+            "invitations": _pending_invitations_for(user), "csrf_token": csrf_token()}
 
 
 @bp.post("/logout")
@@ -384,10 +415,13 @@ def deliver_pending_identity_emails(db=None):
     return delivered
 
 
-def consume_token(raw, kind):
+def consume_token(raw, kind, *, lock=True):
     if not isinstance(raw, str) or len(raw) > 256 or len(raw) < 20:
         raise APIError("This link is invalid or expired.", 400, "invalid_token")
-    token = get_db().scalar(select(Token).where(Token.token_hash == hash_secret(raw), Token.kind == kind).with_for_update())
+    query = select(Token).where(Token.token_hash == hash_secret(raw), Token.kind == kind)
+    if lock:
+        query = query.with_for_update()
+    token = get_db().scalar(query)
     if not token or token.used_at or token.revoked_at or token.expires_at <= now():
         raise APIError("This link is invalid or expired.", 400, "invalid_token")
     return token
@@ -416,7 +450,11 @@ def reset_complete():
     if not user or not user.active:
         raise APIError("This link is invalid or expired.", 400, "invalid_token")
     _check_mfa(user, data.get("otp"))
-    user.password_hash = generate_password_hash(validate_password(data.get("password")), method="scrypt")
+    new_password = validate_password(data.get("password"))
+    if user.password_change_required and check_password_hash(user.password_hash, new_password):
+        raise APIError("Choose a new password different from your temporary password.")
+    user.password_hash = generate_password_hash(new_password, method="scrypt")
+    user.password_change_required = False
     token.used_at = now()
     for record in db.scalars(select(AuthSession).where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))):
         record.revoked_at = now()
@@ -432,14 +470,13 @@ def reset_complete():
 @bp.post("/invitations/accept")
 def accept_invitation():
     data, db = body(), get_db()
-    token = consume_token(data.get("token"), "invitation")
-    set_scope(token.organization_id)
-    org = db.get(Organization, token.organization_id)
-    member = db.scalar(select(Membership).where(Membership.id == token.data.get("membership_id"),
-        Membership.organization_id == token.organization_id).with_for_update())
-    if not org or not org.active or not member or member.status != "invited":
-        raise APIError("This invitation is no longer available.", 400, "invalid_token")
-    user = db.get(User, member.user_id)
+    # Discover the token first; every acceptance locks organization, user, membership,
+    # then token in the same order as invitation issuance and membership updates.
+    candidate = consume_token(data.get("token"), "invitation", lock=False)
+    org, user, member, token = _lock_invitation(candidate.organization_id,
+        candidate.data.get("membership_id"), user_id=candidate.user_id, token_id=candidate.id)
+    if user.password_change_required:
+        raise APIError("Sign in and change your temporary password before accepting this invitation.", 403, "password_change_required")
     if user.password_hash:
         if not (current_user.is_authenticated and current_user.id == user.id):
             if not check_password_hash(user.password_hash, str(data.get("password", ""))):
@@ -453,11 +490,68 @@ def accept_invitation():
     user.active = True
     member.status, member.activated_at = "active", now()
     token.used_at = now()
+    token.data = {key: value for key, value in (token.data or {}).items() if key != "delivery"}
     _new_session(user)
     g.organization, g.membership = org, member
     audit("membership.invitation_accepted", "membership", member.id)
     db.commit()
-    return {"user": user_json(user), "organizations": _memberships_for(user), "csrf_token": csrf_token()}
+    return {"user": user_json(user), "organizations": _memberships_for(user),
+            "invitations": _pending_invitations_for(user), "csrf_token": csrf_token()}
+
+
+def _lock_invitation(organization_id, membership_id, *, user_id, token_id=None):
+    """Validate and serialize activation with issuance, revocation, and other acceptance."""
+    db = get_db()
+    org = db.scalar(select(Organization).where(Organization.id == organization_id,
+        Organization.active.is_(True)).with_for_update(key_share=True).execution_options(populate_existing=True))
+    if not org:
+        raise APIError("This invitation is no longer available.", 400, "invalid_token")
+    user = db.scalar(select(User).where(User.id == user_id, User.active.is_(True))
+        .with_for_update().execution_options(populate_existing=True))
+    member = db.scalar(select(Membership).where(Membership.id == membership_id,
+        Membership.organization_id == org.id, Membership.user_id == user_id)
+        .with_for_update().execution_options(populate_existing=True))
+    if not user or not member or member.status != "invited":
+        raise APIError("This invitation is no longer available.", 400, "invalid_token")
+    query = select(Token).where(Token.kind == "invitation", Token.user_id == user.id,
+        Token.organization_id == org.id, Token.data["membership_id"].astext == member.id,
+        Token.used_at.is_(None), Token.revoked_at.is_(None), Token.expires_at > now())
+    if token_id:
+        query = query.where(Token.id == token_id)
+    token = db.scalar(query.order_by(Token.expires_at.desc()).with_for_update()
+        .execution_options(populate_existing=True))
+    if not token:
+        raise APIError("This invitation is no longer available.", 400, "invalid_token")
+    set_scope(org.id)
+    return org, user, member, token
+
+
+@bp.post("/invitations/<membership_id>/accept")
+@require_login
+def accept_own_invitation(membership_id):
+    data, db = body(), get_db()
+    candidate = db.scalar(select(Membership).where(Membership.id == valid_id(membership_id),
+        Membership.user_id == g.user.id, Membership.status == "invited"))
+    if not candidate:
+        raise APIError("This invitation is no longer available.", 400, "invalid_token")
+    org, user, member, token = _lock_invitation(candidate.organization_id, candidate.id, user_id=g.user.id)
+    if user.password_change_required:
+        raise APIError("Change your temporary password before accepting this invitation.", 403, "password_change_required")
+    if (org.settings or {}).get("require_mfa") and not user.mfa_enabled:
+        raise APIError("Enroll MFA in Profile and security before joining this organization.", 403, "mfa_enrollment_required")
+    if user.mfa_enabled and not g.auth_session.mfa_verified:
+        _check_mfa(user, data.get("otp"))
+        g.auth_session.mfa_verified = True
+    member.status, member.activated_at = "active", now()
+    token.used_at = now()
+    token.data = {key: value for key, value in (token.data or {}).items() if key != "delivery"}
+    g.user, g.organization, g.membership = user, org, member
+    audit("membership.invitation_accepted", "membership", member.id,
+          after={"role": member.role}, reason="Explicit acceptance by the signed-in invited identity")
+    db.commit()
+    return {"user": user_json(user), "organizations": _memberships_for(user),
+            "invitations": _pending_invitations_for(user), "csrf_token": csrf_token(),
+            "message": "Invitation accepted. Your organization workspace is ready."}
 
 
 @bp.route("/profile", methods=["GET", "POST"])
@@ -467,10 +561,15 @@ def profile():
         return {"user": user_json(g.user), "recovery_codes_remaining": len(g.user.mfa_recovery_hashes or [])}
     data, db = body(), get_db()
     if "password" in data:
+        db.refresh(g.user, with_for_update=True)
         if not check_password_hash(g.user.password_hash, str(data.get("current_password", ""))):
             raise APIError("Current password is incorrect.", 403, "invalid_credentials")
+        new_password = validate_password(data["password"])
+        if g.user.password_change_required and check_password_hash(g.user.password_hash, new_password):
+            raise APIError("Choose a new password different from your temporary password.")
         _check_mfa(g.user, data.get("otp"))
-        g.user.password_hash = generate_password_hash(validate_password(data["password"]), method="scrypt")
+        g.user.password_hash = generate_password_hash(new_password, method="scrypt")
+        g.user.password_change_required = False
         for record in db.scalars(select(AuthSession).where(AuthSession.user_id == g.user.id,
                 AuthSession.id != session["auth_session_id"], AuthSession.revoked_at.is_(None))):
             record.revoked_at = now()

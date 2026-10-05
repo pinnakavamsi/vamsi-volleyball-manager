@@ -63,15 +63,15 @@ The following Actions secrets are configured; their values are intentionally abs
 
 `DEPLOY_PORT` is optional and currently uses the workflow's port 22 default. Repository variable **`DEPLOY_ENABLED=true`** has been set and verified. The first release was deployed through the operator connection. Initial run [#1](https://github.com/OWNER/REPOSITORY/actions/runs/37367922793) skipped deployment because the enable variable was still unset when it was evaluated; its setup-only notice job did not deploy code.
 
-Manual run [#2](https://github.com/OWNER/REPOSITORY/actions/runs/37368139301), deployment job `111958746440`, has accepted the enabled variable and is waiting for a GitHub-hosted runner to come online. It is no longer waiting behind run #1. GitHub reported [an October 5 Actions incident delaying hosted-runner assignment](https://www.githubstatus.com/incidents/3q1yb5m7ltvb) during setup review. The queued job is consistent with that incident; actual GitHub-triggered completion and a subsequent code update are **pending verification**.
+Manual run [#2](https://github.com/OWNER/REPOSITORY/actions/runs/37368139301) and push run [#3](https://github.com/OWNER/REPOSITORY/actions/runs/37368878393) failed while waiting for a GitHub-hosted runner. Run #3 reports “The job was not acquired by Runner of type hosted even after multiple attempts” and an internal server error. GitHub reported [an October 5 Actions incident delaying hosted-runner assignment](https://www.githubstatus.com/incidents/3q1yb5m7ltvb). Actual GitHub-triggered completion remains **pending verification**.
 
 The dedicated deployment key was used directly with the workflow's exact verified SSH upload and forced receiver command. That release completed migrations, restarted the app, and passed container and loopback readiness. This verifies the VM deployment path; execution by a GitHub runner remains pending.
 
 ## Outstanding setup
 
 - Verify the queued GitHub deployment completes and a real subsequent code update reaches the VM.
-- Provision the first platform administrator through the prompted one-shot bootstrap command and enroll MFA.
-- Configure SMTP for actual invitations and password reset delivery; delivery currently remains deferred.
+- The first platform administrator has been provisioned; complete MFA enrollment in Profile and security.
+- Organization invitations use [manual account delivery](organizer-onboarding.md), selected by the owner, and do not require SMTP. The optional email password-reset adapter remains deferred.
 - Select and configure a licensed weather provider; weather is disabled.
 - Configure independently stored encrypted backups, continuous WAL/PITR, private-file/config recovery, retention, and backup alerts; no off-site recovery destination is configured.
 - Complete and record the target-host restore, capacity, real-device, and accessibility gates before hosting production data.

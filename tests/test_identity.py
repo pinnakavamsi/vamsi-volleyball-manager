@@ -171,7 +171,14 @@ def test_existing_identity_invitation_never_changes_other_membership(app, identi
     response = c.post("/api/v1/memberships", json={"email": identity_case["existing_email"], "role": "results"}, headers=h)
     assert response.status_code == 201, response.get_json()
     assert "token" not in response.get_json()
-    raw = development_link_token(app, "Join")
+    # Manual provisioning sends no email. A known token in this isolated fixture
+    # continues to exercise acceptance of previously issued private email links.
+    raw = secrets.token_urlsafe(32)
+    with app.app_context():
+        token = get_db().scalar(select(Token).where(Token.kind == "invitation",
+            Token.user_id == identity_case["existing_user_id"], Token.organization_id == identity_case["org_a"]))
+        token.token_hash = hash_secret(raw)
+        get_db().commit()
     with app.app_context():
         token = get_db().scalar(select(Token).where(Token.token_hash == hash_secret(raw)))
         assert token and raw != token.token_hash and raw not in json.dumps(token.data)
