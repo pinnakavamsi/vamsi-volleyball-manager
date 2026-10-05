@@ -46,6 +46,11 @@ services:
     init: true
     env_file:
       - ${VM_ROOT:-/opt/volleyball-manager}/config/runtime.env
+    environment:
+      # Photon permits reasonable public API use. Searches are cached and bounded.
+      GEOCODING_PROVIDER: photon
+      GEOCODING_PROVIDER_URL: https://photon.komoot.io/api/
+      GEOCODING_LICENSE_CONFIRMED: "true"
     depends_on:
       postgres:
         condition: service_healthy
