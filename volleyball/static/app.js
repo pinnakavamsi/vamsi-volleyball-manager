@@ -40,7 +40,8 @@ let organizerLayout = {},
   refreshTimer,
   refreshCleanup,
   qrTimer,
-  qrDeadline = 0;
+  qrDeadline = 0,
+  qrGeneration = 0;
 const app = document.querySelector("#app");
 const nav = [
   ["overview", "Overview", "grid"],
@@ -2614,6 +2615,7 @@ async function validateEvent(id) {
 }
 let activeMatchId;
 function hideQR() {
+  qrGeneration += 1;
   clearInterval(qrTimer);
   qrDeadline = 0;
   const q = document.querySelector("#qr-content");
@@ -2621,7 +2623,11 @@ function hideQR() {
     q.replaceChildren();
     q.hidden = true;
   }
-  document.querySelector("#qr-message")?.remove();
+  const message = document.querySelector("#qr-message");
+  if (message) {
+    message.replaceChildren();
+    message.hidden = true;
+  }
 }
 async function openMatch(id) {
   hideQR();
@@ -2639,7 +2645,7 @@ async function openMatch(id) {
           ?.timezone || org.timezone;
   modal(
     "Game preparation & result review",
-    `<div class="record-top">${badge(m.status)}${badge(m.result_status)}<span class="muted small">Version ${m.version}</span></div><h2 class="section-gap">${esc(teamName(m, "a"))} <span class="muted">vs</span> ${esc(teamName(m, "b"))}</h2><dl class="detail-list"><div><dt>Court</dt><dd>${esc(courtName(m))}</dd></div><div><dt>Planned time</dt><dd>${esc(dt(m.planned_at, { timeZone: tournament?.tournament.id === m.tournament_id ? tournament.tournament.timezone : items(dashboard?.tournaments).find((t) => t.id === m.tournament_id)?.timezone || org?.timezone }))}</dd></div><div><dt>Set scores</dt><dd>${esc(score(m))}</dd></div><div><dt>Referee</dt><dd>${esc(m.scorer?.name || m.referee_name || "No unverified referee name")}${m.scorer ? '<div class="muted small">' + (m.scorer.connected ? "Connected" : "Disconnected — game remains active") + " · " + esc(dt(m.scorer.last_seen_at)) + "</div>" : ""}</dd></div></dl>${rulesSummary(m.rules)}${can("manage") && !m.rule_snapshot ? '<button type="button" class="button secondary section-gap" id="match-rule-override">Override game scoring rules</button>' : ""}${can("schedule") ? `<div class="section-gap"><h3>Court assignment</h3><div class="filters">${select("court_id", "Eligible court", options(items(courts).filter((c) => c.available || c.id === m.court?.id)), m.court?.id || "", 'id="assign-court"')}<button type="button" class="button secondary" id="assign-court-action">Assign court</button>${m.status === "ready" ? '<button type="button" class="button ghost" id="release-court">Release reservation</button>' : ""}</div></div>` : ""}${can("manage") ? `<div class="section-gap"><h3>Delegated referee access</h3><p class="muted small">Referee QR is hidden. Reveal for 10 seconds; admission and an admitted scoring session have independent lifetimes.</p><div class="button-group"><button type="button" class="button primary" id="show-qr">Show QR Code</button><button type="button" class="button secondary" id="revoke-referee">Revoke referee access</button></div><div class="qr-box" id="qr-content" hidden></div></div>` : ""}${can("results") && m.status === "ended" ? `<div class="section-gap"><h3>Result review</h3><p class="muted small">${esc(score(m))} · ${esc(pretty(m.outcome || "played"))} · ${esc(pretty(m.result_status))}</p><div class="button-group">${m.result_status === "submitted" ? '<button type="button" class="button primary" id="approve-result">Approve official result</button>' : ""}${!m.winner_id && m.team_a && m.team_b ? '<button type="button" class="button secondary" id="resolve-winner">Resolve winner</button>' : ""}<button type="button" class="button secondary" id="correct-result">Correct with revision</button></div></div>` : ""}${can("results") || can("schedule") ? `<div class="section-gap"><h3>Game operations</h3><div class="button-group">${can("results") && m.result_status !== "finalized" ? '<button type="button" class="button secondary" id="match-outcome">Record exceptional outcome</button>' : ""}${can("schedule") ? '<button type="button" class="button secondary" id="edit-fixture">Revise fixture</button>' : ""}</div></div>` : ""}`,
+    `<div class="record-top">${badge(m.status)}${badge(m.result_status)}<span class="muted small">Version ${m.version}</span></div><h2 class="section-gap">${esc(teamName(m, "a"))} <span class="muted">vs</span> ${esc(teamName(m, "b"))}</h2><dl class="detail-list"><div><dt>Court</dt><dd>${esc(courtName(m))}</dd></div><div><dt>Planned time</dt><dd>${esc(dt(m.planned_at, { timeZone: tournament?.tournament.id === m.tournament_id ? tournament.tournament.timezone : items(dashboard?.tournaments).find((t) => t.id === m.tournament_id)?.timezone || org?.timezone }))}</dd></div><div><dt>Set scores</dt><dd>${esc(score(m))}</dd></div><div><dt>Referee</dt><dd>${esc(m.scorer?.name || m.referee_name || "No unverified referee name")}${m.scorer ? '<div class="muted small">' + (m.scorer.connected ? "Connected" : "Disconnected — game remains active") + " · " + esc(dt(m.scorer.last_seen_at)) + "</div>" : ""}</dd></div></dl>${rulesSummary(m.rules)}${can("manage") && !m.rule_snapshot ? '<button type="button" class="button secondary section-gap" id="match-rule-override">Override game scoring rules</button>' : ""}${can("schedule") ? `<div class="section-gap"><h3>Court assignment</h3><div class="filters">${select("court_id", "Eligible court", options(items(courts).filter((c) => c.available || c.id === m.court?.id)), m.court?.id || "", 'id="assign-court"')}<button type="button" class="button secondary" id="assign-court-action">Assign court</button>${m.status === "ready" ? '<button type="button" class="button ghost" id="release-court">Release reservation</button>' : ""}</div></div>` : ""}${can("manage") ? `<div class="section-gap"><h3>Delegated referee access</h3><p class="muted small">Assign a court, then show this game's referee QR for 10 seconds. Hiding the QR does not end a referee's scoring session.</p><div class="button-group"><button type="button" class="button primary" id="show-qr">Show QR Code</button><button type="button" class="button secondary" id="revoke-referee">Revoke referee access</button></div><div class="form-error" id="qr-message" role="alert" hidden></div><div class="qr-box" id="qr-content" role="region" aria-label="Private referee QR code" hidden></div></div>` : ""}${can("results") && m.status === "ended" ? `<div class="section-gap"><h3>Result review</h3><p class="muted small">${esc(score(m))} · ${esc(pretty(m.outcome || "played"))} · ${esc(pretty(m.result_status))}</p><div class="button-group">${m.result_status === "submitted" ? '<button type="button" class="button primary" id="approve-result">Approve official result</button>' : ""}${!m.winner_id && m.team_a && m.team_b ? '<button type="button" class="button secondary" id="resolve-winner">Resolve winner</button>' : ""}<button type="button" class="button secondary" id="correct-result">Correct with revision</button></div></div>` : ""}${can("results") || can("schedule") ? `<div class="section-gap"><h3>Game operations</h3><div class="button-group">${can("results") && m.result_status !== "finalized" ? '<button type="button" class="button secondary" id="match-outcome">Record exceptional outcome</button>' : ""}${can("schedule") ? '<button type="button" class="button secondary" id="edit-fixture">Revise fixture</button>' : ""}</div></div>` : ""}`,
     null,
     { wide: true },
   );
@@ -2835,16 +2841,24 @@ async function openMatch(id) {
 }
 async function revealQR(id) {
   hideQR();
-  const button = document.querySelector("#show-qr");
+  const dialog = document.querySelector("#dialog");
+  const button = dialog?.querySelector("#show-qr");
+  const q = dialog?.querySelector("#qr-content");
+  const message = dialog?.querySelector("#qr-message");
+  if (!dialog?.open || !button || !q || !message || activeMatchId !== id)
+    return;
+  const generation = qrGeneration;
+  const current = () =>
+    generation === qrGeneration &&
+    !document.hidden &&
+    dialog.open &&
+    activeMatchId === id &&
+    dialog.querySelector("#show-qr") === button &&
+    dialog.querySelector("#qr-content") === q;
   button.disabled = true;
   try {
     const grant = await api(`/matches/${id}/qr`, { method: "POST", data: {} });
-    if (document.hidden || activeMatchId !== id) return;
-    const q = document.querySelector("#qr-content");
-    if (!q) return;
-    qrDeadline = performance.now() + 10000;
-    q.hidden = false;
-    q.innerHTML = `<div class="qr-count"><span id="qr-seconds">10</span> <small>seconds remaining</small></div><div id="qr-image"></div><p class="small">Private game access · Keep this screen visible while the referee scans.</p>`;
+    if (!current()) return;
     const parsed = new DOMParser().parseFromString(
       grant.qr_svg,
       "image/svg+xml",
@@ -2859,20 +2873,26 @@ async function revealQR(id) {
         ),
       )
     ) {
+      qrDeadline = performance.now() + 10000;
+      q.innerHTML = `<div class="qr-count"><span id="qr-seconds">10</span> <small>seconds remaining</small></div><div id="qr-image"></div><p class="small">Private game access · Keep this screen visible while the referee scans.</p>`;
       q.querySelector("#qr-image").append(document.importNode(svg, true));
+      q.hidden = false;
+      q.scrollIntoView({ block: "nearest" });
     } else
       throw new Error("Unable to render private QR. Try revealing it again.");
     qrTimer = setInterval(() => {
       const sec = Math.ceil((qrDeadline - performance.now()) / 1000);
-      if (sec <= 0 || document.hidden) hideQR();
-      else if (document.querySelector("#qr-seconds"))
-        document.querySelector("#qr-seconds").textContent = sec;
+      if (sec <= 0 || !current()) hideQR();
+      else q.querySelector("#qr-seconds").textContent = sec;
     }, 100);
   } catch (e) {
+    if (!current()) return;
     hideQR();
-    toast(e.message, true);
+    message.textContent = e.message;
+    message.hidden = false;
+    message.scrollIntoView({ block: "nearest" });
   } finally {
-    button.disabled = false;
+    if (button.isConnected) button.disabled = false;
   }
 }
 async function matchMutation(id, action, data, msg) {
