@@ -1,0 +1,15 @@
+# Managed by Volleyball Manager
+# Native host Caddy; this block can be imported alongside existing sites.
+# DNS must resolve this hostname to the VM, with TCP 80/443 reachable.
+volleyball.example.com {
+    encode zstd gzip
+    # Access logs remain disabled: identity/referee URLs can contain tokens.
+    @operational path /api/v1/health/*
+    respond @operational 404
+    reverse_proxy 127.0.0.1:5050 {
+        # The application trusts exactly one proxy. Replace incoming values.
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+}

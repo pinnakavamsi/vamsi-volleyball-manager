@@ -4,7 +4,7 @@ A mobile browser application for organization tournament/league administration, 
 
 Designed and developed by Vamsi Pinnaka
 
-The local build uses Python (tested with 3.14), Flask, SQLAlchemy 2, Alembic, PostgreSQL 18 and modular HTML/CSS/JavaScript. Dependencies are pinned in `requirements.txt`. PostgreSQL holds accepted scoring actions, projections, court ownership, sessions, results, rules and audit history. Browser storage holds only preferences and clearly Pending unsent actions. These are implementation defaults for this reviewable build; no production hosting, provider or live account has been selected/connected.
+The local build uses Python (tested with 3.14), Flask, SQLAlchemy 2, Alembic, PostgreSQL 18 and modular HTML/CSS/JavaScript. Dependencies are pinned in `requirements.txt`. PostgreSQL holds accepted scoring actions, projections, court ownership, sessions, results, rules and audit history. Browser storage holds only preferences and clearly Pending unsent actions. The demo VM deployment package is described below; external mail/weather/recovery providers and production acceptance remain separate configuration and release work.
 
 ## Start the local application
 
@@ -84,6 +84,12 @@ Inspect journal/projection consistency for an explicit organization:
 
 If a reviewed projection rebuild is required, `rebuild-match --organization-id ... --match-id ... --confirm` reconstructs from immutable accepted journal snapshots and records an audit event. Do not treat it as a way to rewrite results. `publish-outbox` records bounded committed delivery readiness; clients use authorized polling and refresh current persisted snapshots after reconnection.
 
+## Deploy the demo VM
+
+The [deployment guide](docs/deployment.md) prepares `https://volleyball.example.com` with host Caddy and exactly two long-running Docker services: the application (Gunicorn plus export worker) and private PostgreSQL. Database data and private files persist independently of release source/images. Runtime database credentials are separate from one-shot migration/operator credentials.
+
+Once the VM and GitHub Actions SSH secrets are configured and repository variable `DEPLOY_ENABLED=true` is set, each push to `main` uploads that immutable commit, builds its Docker image on the VM, migrates once under a deployment lock, restarts the app, and requires readiness before success. The private repository stays private; the VM needs no GitHub token. See the guide for first administrator setup, verified SSH host keys, rollback, and backup/recovery gates.
+
 ## Application and integration documentation
 
 - [Versioned API and scoring/recovery examples](docs/api.md)
@@ -91,6 +97,7 @@ If a reviewed projection rebuild is required, `rebuild-match --organization-id .
 - [Reports, reviewed CSV imports, exports and portability](docs/reporting.md)
 - [Weather adapter, licensing, cache and actual event-date horizon](docs/weather-adapter.md)
 - [Operations, encrypted backups, continuous WAL/PITR, restore, migrations and incidents](docs/operations-runbook.md)
+- [Caddy, Docker, private PostgreSQL and automatic GitHub deployment](docs/deployment.md)
 - [Requirement traceability and real-device/release checklist](docs/release-checklist.md)
 - [Local browser workflow evidence](docs/browser-review.md)
 - [Report PDF visual evidence](docs/report-pdf-review.md)

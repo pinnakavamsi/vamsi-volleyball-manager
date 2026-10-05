@@ -1,0 +1,18 @@
+# Allow only image inputs. This also protects local build contexts.
+**
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!alembic.ini
+!wsgi.py
+!volleyball/
+!volleyball/**
+!migrations/
+!migrations/**
+!deploy/
+!deploy/docker/
+!deploy/docker/**
+!deploy/gunicorn.conf.py
+**/__pycache__/**
+**/*.pyc
+**/.DS_Store

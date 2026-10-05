@@ -4,6 +4,8 @@ from pathlib import Path
 from flask import Flask,g,request,jsonify
 from dotenv import load_dotenv
 from sqlalchemy.exc import IntegrityError,OperationalError,DataError
+from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.exceptions import SecurityError
 from .db import init_db,get_db
 from .common import APIError
 
@@ -18,7 +20,9 @@ def create_app(config=None):
         SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',
         SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE','true').lower()=='true',
         PERMANENT_SESSION_LIFETIME=28800,MAX_CONTENT_LENGTH=8*1024*1024,
-        PRIVATE_STORAGE_PATH=str(ROOT/'instance'/'files'),BACKUP_STATUS_PATH=os.environ.get('BACKUP_STATUS_PATH'),SCHEMA_REVISION=os.environ.get('SCHEMA_REVISION'),
+        PRIVATE_STORAGE_PATH=os.environ.get('PRIVATE_STORAGE_PATH',str(ROOT/'instance'/'files')),BACKUP_STATUS_PATH=os.environ.get('BACKUP_STATUS_PATH'),SCHEMA_REVISION=os.environ.get('SCHEMA_REVISION'),
+        TRUST_PROXY_HEADERS=os.environ.get('TRUST_PROXY_HEADERS','false').lower()=='true',
+        TRUSTED_HOSTS=[host.strip() for host in os.environ.get('TRUSTED_HOSTS','').split(',') if host.strip()] or None,
         MFA_ENCRYPTION_KEY=os.environ.get('MFA_ENCRYPTION_KEY'),
         WEATHER_PROVIDER_URL=os.environ.get('WEATHER_PROVIDER_URL'),WEATHER_PROVIDER_NAME=os.environ.get('WEATHER_PROVIDER_NAME'),
         WEATHER_LICENSE_CONFIRMED=os.environ.get('WEATHER_LICENSE_CONFIRMED','false').lower()=='true',WEATHER_PROVIDER_TOKEN=os.environ.get('WEATHER_PROVIDER_TOKEN'),
@@ -32,6 +36,9 @@ def create_app(config=None):
     if app.config['APP_ENV']=='production':
         if len(app.config['SECRET_KEY'])<48 or not app.config['MFA_ENCRYPTION_KEY'] or not app.config['SESSION_COOKIE_SECURE']:
             raise RuntimeError('Production requires strong SECRET_KEY, separate MFA_ENCRYPTION_KEY and secure cookies.')
+    if app.config['TRUST_PROXY_HEADERS']:
+        # Enable only when the app is reachable through the single trusted proxy.
+        app.wsgi_app=ProxyFix(app.wsgi_app,x_for=1,x_proto=1,x_host=0,x_port=0,x_prefix=0)
     Path(app.instance_path).mkdir(exist_ok=True)
     init_db(app)
     @app.before_request
@@ -74,6 +81,8 @@ def create_app(config=None):
         return jsonify(error={'code':'database_retry','message':'The database is temporarily unavailable or busy. Pending actions remain unsaved; retry safely.','details':None},request_id=getattr(g,'request_id',None)),503
     @app.errorhandler(404)
     def missing(err):return jsonify(error={'code':'not_found','message':'Page or endpoint not found.','details':None}),404
+    @app.errorhandler(SecurityError)
+    def untrusted_host(err):return jsonify(error={'code':'invalid_host','message':'The requested host is not allowed.','details':None}),400
     @app.errorhandler(413)
     def too_large(err):return jsonify(error={'code':'file_size','message':'Upload exceeds the 8 MB limit.','details':None}),413
     @app.errorhandler(Exception)

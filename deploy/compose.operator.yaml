@@ -1,0 +1,7 @@
+# Use only for short-lived operator commands. Never use this with "up".
+# The default app command refuses to run with privileged database credentials.
+services:
+  app:
+    env_file:
+      - ${VM_ROOT:-/opt/volleyball-manager}/config/runtime.env
+      - ${VM_ROOT:-/opt/volleyball-manager}/config/operator.env
