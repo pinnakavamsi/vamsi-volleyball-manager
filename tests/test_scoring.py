@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date,timedelta
 from sqlalchemy import select,text
 from volleyball.db import get_db,set_scope
-from volleyball.models import Tournament,Division,Stage,Entry,Team,Venue,Court,Match,MatchEvent,CourtAssignment,ScorerSession,Organization
+from volleyball.models import Tournament,Division,Stage,Entry,Team,Venue,Court,Match,MatchEvent,CourtAssignment,ScorerSession,Organization,TournamentVenue
 from volleyball.services.rules import validate_rules
 import pytest
 
@@ -20,6 +20,8 @@ def game_case(app,admin_client,demo):
             team=Team(organization_id=oid,name='Correctness '+str(i));db.add(team);db.flush()
             e=Entry(organization_id=oid,tournament_id=t.id,division_id=d.id,team_id=team.id,name=team.name,seed=i+1);db.add(e);db.flush();es.append(e)
         venue=Venue(organization_id=oid,name='Test hall',timezone='America/New_York');db.add(venue);db.flush()
+        t.settings={**(t.settings or {}),'venue_ids':[venue.id]}
+        db.add(TournamentVenue(organization_id=oid,tournament_id=t.id,venue_id=venue.id,active=True))
         courts=[]
         for i in range(2):
             c=Court(organization_id=oid,venue_id=venue.id,name='Test '+str(i));db.add(c);db.flush();courts.append(c)

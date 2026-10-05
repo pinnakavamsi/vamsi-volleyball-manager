@@ -31,16 +31,18 @@ let match,
   clockTimer,
   renewTimer,
   wakeSentinel,
-  wakeState = "Not requested",
+  wakeState = "Automatic during scoring",
   storageAvailable = true,
   receivedAt = 0;
 const app = document.querySelector("#app");
 const whistle = new Audio("/static/whistle.wav");
 whistle.preload = "auto";
 whistle.volume = 1;
-let soundState = "Tap Test whistle",
-  wakeWanted = false,
-  wakeRequestInFlight = false;
+let wakeWanted = false,
+  wakeRequestInFlight = false,
+  wakeVersion = 0,
+  nextWakeAttemptAt = 0,
+  wakeRetryTimer;
 const queueKey = () => `courtline-queue:${match.id}`;
 function storeQueue() {
   try {
@@ -67,7 +69,8 @@ function accept(data) {
   if (["ended", "cancelled", "abandoned"].includes(match.status)) {
     releaseWake();
     whistle.pause();
-  }
+  } else if (ownsActiveScoring()) requestWake();
+  else releaseWake();
 }
 function pendingState() {
   const s = clone(match.state);
@@ -181,11 +184,11 @@ function draw() {
   );
   const ready = match.status === "ready";
   const ended = ["ended", "cancelled", "abandoned"].includes(match.status);
-  app.innerHTML = `<main id="main" class="scorer-shell"><header class="scorer-header"><span class="brand"><img src="/static/brand.svg" alt="">Courtline <span class="eyebrow">REFEREE</span></span><button class="button secondary small" id="exit-scoring">Exit game</button></header><div class="scorer-subhead"><div><strong>${esc(courtName(match))}</strong><div class="muted small">${esc(match.organization_name || "Delegated game access")}</div><div class="muted small">${esc(match.tournament_name || "Tournament")} · ${esc(match.division_name || "Division")} · ${esc(match.stage_name || "Stage")}</div></div><div style="text-align:right"><span class="scorer-status ${statusClass()}" id="save-status" role="status" aria-live="polite"><i class="dot"></i>${esc(statusText())}</span><div class="scorer-timer" id="match-timer">${timerText()}</div></div></div>${!storageAvailable ? '<div class="banner danger">Offline storage unavailable. Keep this browser open and stay connected; pending entries cannot survive a browser restart.</div>' : ""}${conflict || fenced ? `<div class="banner danger">${fenced ? "Another device owns scoring control. Local pending actions have not been applied." : "Authoritative game state changed. Review pending actions before continuing."}<button class="button secondary" id="reconcile">Review</button></div>` : ""}${
+  app.innerHTML = `<main id="main" class="scorer-shell ${active && owns ? "scorer-playing" : ""}"><header class="scorer-header"><span class="brand"><img src="/static/brand.svg" alt="">Courtline <span class="eyebrow">REFEREE</span></span><button class="button secondary small" id="exit-scoring">Exit game</button></header><div class="scorer-subhead"><div><strong>${esc(courtName(match))}</strong><div class="muted small">${esc(match.organization_name || "Delegated game access")}</div><div class="muted small">${esc(match.tournament_name || "Tournament")} · ${esc(match.division_name || "Division")} · ${esc(match.stage_name || "Stage")}</div></div><div style="text-align:right"><span class="scorer-status ${statusClass()}" id="save-status" role="status" aria-live="polite"><i class="dot"></i>${esc(statusText())}</span><div class="scorer-timer" id="match-timer">${timerText()}</div></div></div>${!storageAvailable ? '<div class="banner danger">Offline storage unavailable. Keep this browser open and stay connected; pending entries cannot survive a browser restart.</div>' : ""}${conflict || fenced ? `<div class="banner danger">${fenced ? "Another device owns scoring control. Local pending actions have not been applied." : "Authoritative game state changed. Review pending actions before continuing."}<button class="button secondary" id="reconcile">Review</button></div>` : ""}${
     !owns && !ended
       ? `<section class="scorer-ready"><span class="eyebrow">CENTRAL GAME RECOVERY</span><h1>${esc(teamName(match, "a"))} vs ${esc(teamName(match, "b"))}</h1><p class="muted small">Recorded sets: ${esc(score(match))} · ${pretty(match.status)}</p><p class="muted small">Taking control revokes the previous phone's write access. A different phone cannot recover actions that were never sent from another device.</p><button class="button primary" id="takeover">Resume and take scoring control</button></section>`
       : ready
-        ? `<section class="scorer-ready"><span class="eyebrow">PREGAME READINESS</span><h1>${esc(teamName(match, "a"))}<br><span class="muted">vs</span><br>${esc(teamName(match, "b"))}</h1><dl class="detail-list"><div><dt>Court</dt><dd>${esc(courtName(match))}</dd></div><div><dt>Competition rules</dt><dd>${ruleText()}</dd></div><div><dt>Connectivity</dt><dd>${navigator.onLine ? "Connected" : "Offline — reconnect before start"}</dd></div><div><dt>Sound readiness</dt><dd id="sound-state">${esc(soundState)}</dd></div></dl><button class="button secondary" id="test-whistle">Test whistle</button><p class="form-help">Check your phone or speaker volume at the venue. Browser audio respects device volume.</p><button class="button primary section-gap" id="start-game" ${conflict || queue.length || !navigator.onLine ? "disabled" : ""}>Start Game ${icon("arrow")}</button></section>`
+        ? `<section class="scorer-ready"><span class="eyebrow">PREGAME READINESS</span><h1>${esc(teamName(match, "a"))}<br><span class="muted">vs</span><br>${esc(teamName(match, "b"))}</h1><dl class="detail-list"><div><dt>Court</dt><dd>${esc(courtName(match))}</dd></div><div><dt>Competition rules</dt><dd>${ruleText()}</dd></div><div><dt>Connectivity</dt><dd>${navigator.onLine ? "Connected" : "Offline — reconnect before start"}</dd></div></dl><button class="whistle-button whistle-test" id="test-whistle">${whistleIcon()}<span>Test whistle</span></button><p class="form-help">Test your phone or speaker before play. Set the device volume so you can hear the whistle; browser audio respects that volume.</p><button class="button primary section-gap" id="start-game" ${conflict || queue.length || !navigator.onLine ? "disabled" : ""}>Start Game ${icon("arrow")}</button></section>`
         : ended
           ? `<section class="scorer-ready"><span class="tournament-symbol" style="margin:auto">${icon("check")}</span><h1>${match.status === "cancelled" ? "Game cancelled" : match.status === "abandoned" ? "Game abandoned" : "Game submitted"}</h1><p>${esc(teamName(match, "a"))} vs ${esc(teamName(match, "b"))}</p><h2>${esc(score(match))}</h2>${badge(match.result_status)}<p class="muted section-gap">The court has been released. ${match.result_status === "finalized" ? "Result is official." : match.result_status === "excluded" ? "This game is excluded from official standings." : "An authorized organizer will review the result."}</p></section>`
           : `<div class="set-line"><strong>Set ${s.set_index + 1}</strong><span>Sets won ${s.sets.filter((v) => v.complete && v.winner === "a").length}–${s.sets.filter((v) => v.complete && v.winner === "b").length}</span>${s.sets
@@ -196,8 +199,8 @@ function draw() {
               )
               .join(
                 "",
-              )}</div><div class="scoreboard">${(flipped ? ["b", "a"] : ["a", "b"]).map((side) => scoreSide(side, s, active && owns && !conflict && !transitionPending)).join("")}</div>${current.complete ? `<div class="banner section-gap">${icon("check")} Set ${s.set_index + 1} complete · ${esc(teamName(match, current.winner || "a"))}${!queue.length ? `<button class="button primary" id="${winnerReached(s) ? "end-game" : "next-set"}">${winnerReached(s) ? "Review & End Game" : "Confirm next set"}</button>` : " · Waiting for durable acknowledgment"}</div>` : ""}<div class="scorer-controls"><button class="button secondary" id="undo-action" ${queue.length || conflict || !owns ? "disabled" : ""}>${icon("refresh")}Undo</button><button class="button secondary" id="flip-sides">⇄ Switch sides</button><button class="button secondary" id="whistle">♬ Whistle</button><button class="button secondary" id="pause-game" ${queue.length || conflict || !owns ? "disabled" : ""}>${match.status === "paused" ? "▶ Resume" : "Ⅱ Pause"}</button><button class="button secondary" id="correct-score" ${queue.length || conflict || !owns ? "disabled" : ""}>Correct score</button><button class="button secondary" id="rules-drawer">Rules & history</button><button class="button secondary" id="wake-retry">${icon("sun")}Screen awake</button><button class="button ${winnerReached(s) ? "primary" : "secondary"}" id="end-game-secondary" ${queue.length || conflict || !owns ? "disabled" : ""}>End Game</button></div>`
-  }<div class="scorer-bottom"><span id="wake-status">Screen awake: ${esc(wakeState)}</span><span id="connection-status">${esc(connection)} · Version ${match.version}</span></div>${credit()}</main>`;
+              )}</div><div class="scoreboard">${(flipped ? ["b", "a"] : ["a", "b"]).map((side) => scoreSide(side, s, active && owns && !conflict && !transitionPending)).join("")}</div>${current.complete ? `<div class="banner section-gap">${icon("check")} Set ${s.set_index + 1} complete · ${esc(teamName(match, current.winner || "a"))}${!queue.length ? `<button class="button primary" id="${winnerReached(s) ? "end-game" : "next-set"}">${winnerReached(s) ? "Review & End Game" : "Confirm next set"}</button>` : " · Waiting for durable acknowledgment"}</div>` : ""}<div class="scorer-controls"><button class="button secondary" id="undo-action" ${queue.length || conflict || !owns ? "disabled" : ""}>${icon("refresh")}Undo</button><button class="button secondary" id="flip-sides">⇄ Switch sides</button><button class="button secondary" id="pause-game" ${queue.length || conflict || !owns ? "disabled" : ""}>${match.status === "paused" ? "▶ Resume" : "Ⅱ Pause"}</button><button class="button secondary" id="correct-score" ${queue.length || conflict || !owns ? "disabled" : ""}>Correct score</button><button class="button secondary" id="rules-drawer">Rules & history</button><button class="button ${winnerReached(s) ? "primary" : "secondary"}" id="end-game-secondary" ${queue.length || conflict || !owns ? "disabled" : ""}>End Game</button></div>`
+  }<div class="scorer-bottom"><span id="wake-status">${esc(wakeState)}</span><span id="connection-status">${esc(connection)} · Version ${match.version}</span></div>${credit()}${active && owns ? `<div class="scorer-whistle-dock" aria-label="Referee whistle"><button class="whistle-button" id="whistle" type="button" aria-label="Play whistle">${whistleIcon()}<span>Whistle</span></button><span class="whistle-dock-caption">Tap to sound · Device volume applies</span></div>` : ""}</main>`;
   bind();
   const restore = focusId
     ? document.getElementById(focusId)
@@ -299,7 +302,6 @@ function bind() {
       wide: true,
     }),
   );
-  document.querySelector("#wake-retry")?.addEventListener("click", requestWake);
   document
     .querySelector("#exit-scoring")
     ?.addEventListener("click", async () => {
@@ -456,6 +458,7 @@ function enqueue(type, payload = {}) {
     type,
     payload,
   };
+  requestWake({ gesture: true });
   queue.push(action);
   storeQueue();
   acknowledged = false;
@@ -593,72 +596,82 @@ function endGame() {
     { submit: "End Game & submit result" },
   );
 }
-async function playWhistle() {
+function whistleIcon() {
+  return '<svg class="whistle-icon" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="m15 11 12-5v7l-10 4a7 7 0 1 1-2-6Z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><circle cx="11" cy="18" r="2.5" stroke="currentColor" stroke-width="2.5"/><path d="m4 24-2 3m20-24 1-2m5 3 2-1" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>';
+}
+function playWhistle() {
   try {
     whistle.pause();
     whistle.currentTime = 0;
-    await whistle.play();
-    soundState = "Whistle ready";
-    toast("Whistle played. Check venue volume.");
-  } catch {
-    soundState = "Sound blocked — check device settings";
-    toast(
-      "Whistle could not play. Check device volume and browser sound settings.",
-      true,
-    );
-  }
-  if (document.querySelector("#sound-state"))
-    document.querySelector("#sound-state").textContent = soundState;
+    const playback = whistle.play();
+    playback?.catch(() => {});
+  } catch {}
+  requestWake({ gesture: true });
 }
-async function requestWake() {
-  if (
-    !["in_progress", "paused"].includes(match?.status) ||
-    document.hidden ||
-    fenced
-  )
-    return;
+function ownsActiveScoring() {
+  return Boolean(match && session && session.generation >= 0 && session.generation === match.generation && !fenced && ["in_progress", "paused"].includes(match.status));
+}
+async function requestWake({ gesture = false } = {}) {
+  if (!ownsActiveScoring() || document.hidden) return;
+  wakeWanted = true;
+  if (gesture) nextWakeAttemptAt = 0;
   if (!("wakeLock" in navigator)) {
-    wakeState = "Unavailable · adjust device auto-lock";
+    wakeState = "Screen awake unavailable · adjust device auto-lock";
     updateWake();
     return;
   }
-  wakeWanted = true;
+  if (wakeRequestInFlight || (wakeSentinel && !wakeSentinel.released) || Date.now() < nextWakeAttemptAt) return;
+  const version = wakeVersion;
+  wakeRequestInFlight = true;
+  clearTimeout(wakeRetryTimer);
   try {
-    if (wakeRequestInFlight || (wakeSentinel && !wakeSentinel.released)) return;
-    wakeRequestInFlight = true;
-    wakeSentinel = await navigator.wakeLock.request("screen");
-    if (
-      !wakeWanted ||
-      document.hidden ||
-      fenced ||
-      !["in_progress", "paused"].includes(match.status)
-    ) {
-      releaseWake();
+    const candidate = await navigator.wakeLock.request("screen");
+    if (version !== wakeVersion || !wakeWanted || document.hidden || !ownsActiveScoring()) {
+      candidate.release().catch(() => {});
       return;
     }
+    if (candidate.released) {
+      nextWakeAttemptAt = Date.now() + 30000;
+      wakeState = "Screen awake interrupted · keep this page visible";
+      return;
+    }
+    wakeSentinel = candidate;
     wakeState = "Screen awake";
-    wakeSentinel.addEventListener("release", () => {
-      wakeState = "Interrupted · keep page visible";
+    candidate.addEventListener("release", () => {
+      if (wakeSentinel !== candidate) return;
       wakeSentinel = null;
+      wakeState = "Screen awake interrupted · keep this page visible";
       updateWake();
-      if (wakeWanted && !document.hidden && !fenced) requestWake();
+      if (wakeWanted && !document.hidden && ownsActiveScoring()) {
+        nextWakeAttemptAt = Date.now() + 30000;
+        clearTimeout(wakeRetryTimer);
+        wakeRetryTimer = setTimeout(requestWake, 30000);
+      }
     });
   } catch {
-    wakeState = "Denied · check power / auto-lock settings";
+    if (version === wakeVersion && wakeWanted && !document.hidden && ownsActiveScoring()) {
+      nextWakeAttemptAt = Date.now() + 30000;
+      wakeState = "Device auto-lock applies · check power settings";
+    }
   } finally {
     wakeRequestInFlight = false;
+    updateWake();
+    if (version !== wakeVersion && wakeWanted && !document.hidden && ownsActiveScoring()) requestWake();
   }
-  updateWake();
 }
 function updateWake() {
-  const n = document.querySelector("#wake-status");
-  if (n) n.textContent = wakeState;
+  const node = document.querySelector("#wake-status");
+  if (node) node.textContent = wakeState;
 }
 function releaseWake() {
   wakeWanted = false;
-  wakeSentinel?.release().catch(() => {});
+  wakeVersion++;
+  clearTimeout(wakeRetryTimer);
+  nextWakeAttemptAt = 0;
+  const sentinel = wakeSentinel;
   wakeSentinel = null;
-  wakeState = "Released";
+  if (sentinel && !sentinel.released) sentinel.release().catch(() => {});
+  wakeState = "Automatic during scoring";
   updateWake();
 }
 function setupLifecycle() {
@@ -723,6 +736,7 @@ function setupLifecycle() {
       releaseWake();
       whistle.pause();
     } else {
+      nextWakeAttemptAt = 0;
       requestWake();
       flush();
     }

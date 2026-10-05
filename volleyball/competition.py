@@ -17,6 +17,7 @@ from .services.rankings import standings,compare_pools
 from .services.formats import FORMATS,round_robin,bracket
 from .services.courts import assign_court,release_court,assignment
 from .scoring import elapsed,stop_clock,initial_state
+from .locations import guard_venue_removal,tournament_venue_ids,validate_venue_ids
 bp=Blueprint('competition',__name__,url_prefix='/api/v1')
 
 def owned(cls,identifier,lock=False):
@@ -86,10 +87,8 @@ def tournament_detail(t,public=False):
     stages=list(db.scalars(select(Stage).where(Stage.tournament_id==t.id).order_by(Stage.position)))
     es=list(db.scalars(select(Entry).where(Entry.tournament_id==t.id).order_by(Entry.seed)))
     ms=list(db.scalars(select(Match).where(Match.tournament_id==t.id).order_by(Match.planned_at,Match.round_number).limit(1000)))
-    venue_ids=(t.settings or {}).get('venue_ids',[])
+    venue_ids=tournament_venue_ids(t)
     all_venues=list(db.scalars(select(Venue).where(Venue.organization_id==t.organization_id)))
-    if not venue_ids:
-        venue_ids=list(db.scalars(select(Court.venue_id).join(CourtAssignment,CourtAssignment.court_id==Court.id).join(Match,Match.id==CourtAssignment.match_id).where(Match.tournament_id==t.id).distinct()))
     vs=[v for v in all_venues if v.id in venue_ids]
     cs=list(db.scalars(select(Court).where(Court.venue_id.in_([v.id for v in vs])))) if vs else []
     org=db.get(Organization,t.organization_id)
@@ -148,7 +147,9 @@ def record_rules(obj,reason):
     db.add(RuleVersion(organization_id=obj.organization_id,tournament_id=tournament_id,division_id=obj.id if isinstance(obj,Division) else getattr(obj,'division_id',None),stage_id=obj.id if isinstance(obj,Stage) else None,scope_type=scope,scope_id=obj.id,version=version,rules=deepcopy(obj.rules),reason=reason,created_by=g.user.id))
 
 def sync_venues(t,venue_ids):
+    venue_ids=validate_venue_ids(venue_ids)
     db=get_db();existing={v.venue_id:v for v in db.scalars(select(TournamentVenue).where(TournamentVenue.tournament_id==t.id))}
+    guard_venue_removal(t,[venue_id for venue_id,row in existing.items() if row.active and venue_id not in venue_ids])
     for venue_id,row in existing.items():row.active=venue_id in venue_ids
     for venue_id in venue_ids:
         owned(Venue,venue_id)
@@ -199,6 +200,7 @@ def tournaments():
     if kind not in ('tournament','league'):raise APIError('Choose tournament or league.')
     settings=data.get('settings',{})
     if not isinstance(settings,dict):raise APIError('Settings must be an object.')
+    if 'venue_ids' in settings:settings={**settings,'venue_ids':validate_venue_ids(settings['venue_ids'])}
     for vid in settings.get('venue_ids',[]):owned(Venue,vid)
     row=Tournament(organization_id=g.organization.id,name=n,slug=slug,description=str(data.get('description',''))[:5000],start_date=start,end_date=end,
         timezone=tz(data.get('timezone',g.organization.timezone)),competition_type=kind,rules=validate_rules(data.get('rules',DEFAULT_RULES)),settings=settings,status='draft',visibility='private')
@@ -210,7 +212,7 @@ def tournament(identifier):
     db=get_db();t=owned(Tournament,identifier,lock=request.method=='PATCH')
     if request.method=='GET':return tournament_detail(t)
     if g.membership.role not in ('admin','manager'):raise APIError('Tournament management permission is required.',403)
-    data=body();before=serialize(t)
+    data=body();before=serialize(t);prior_venue_ids=tournament_venue_ids(t)
     for key in ('name','description','timezone','start_date','end_date','visibility','status','rules','settings'):
         if key not in data:continue
         value=data[key]
@@ -226,6 +228,9 @@ def tournament(identifier):
             value=validate_rules(value);guard_ranking_change(t,value,data)
         elif key=='settings':
             if not isinstance(value,dict):raise APIError('Settings must be an object.')
+            if 'venue_ids' in value:
+                value={**value,'venue_ids':validate_venue_ids(value['venue_ids'])}
+                guard_venue_removal(t,[vid for vid in prior_venue_ids if vid not in value['venue_ids']])
             for vid in value.get('venue_ids',[]):owned(Venue,vid)
             value={**(t.settings or {}),**value}
         setattr(t,key,value)
@@ -524,7 +529,11 @@ def match(identifier):
 @bp.post('/matches/<identifier>/court')
 @require_org('schedule')
 def court(identifier):
-    db=get_db();m=owned(Match,identifier,True);data=body();cid=valid_id(data.get('court_id'))
+    db=get_db();hint=owned(Match,identifier)
+    # Venue links and result workflows use tournament -> match lock order.
+    # Lock the association owner first so detachment cannot race reservation.
+    db.scalar(select(Tournament).where(Tournament.id==hint.tournament_id,Tournament.organization_id==g.organization.id).with_for_update())
+    m=owned(Match,identifier,True);data=body();cid=valid_id(data.get('court_id'))
     lock_schedule(m.organization_id)
     conflicts=schedule_conflicts(m,cid)
     if conflicts:raise APIError('Resolve schedule/court conflicts before reserving.',400,details=conflicts)

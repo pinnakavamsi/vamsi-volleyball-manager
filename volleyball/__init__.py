@@ -26,6 +26,9 @@ def create_app(config=None):
         MFA_ENCRYPTION_KEY=os.environ.get('MFA_ENCRYPTION_KEY'),
         WEATHER_PROVIDER_URL=os.environ.get('WEATHER_PROVIDER_URL'),WEATHER_PROVIDER_NAME=os.environ.get('WEATHER_PROVIDER_NAME'),
         WEATHER_LICENSE_CONFIRMED=os.environ.get('WEATHER_LICENSE_CONFIRMED','false').lower()=='true',WEATHER_PROVIDER_TOKEN=os.environ.get('WEATHER_PROVIDER_TOKEN'),
+        WEATHER_PROVIDER_TYPE=os.environ.get('WEATHER_PROVIDER_TYPE','normalized'),WEATHER_PROVIDER_API_KEY=os.environ.get('WEATHER_PROVIDER_API_KEY'),
+        GEOCODING_PROVIDER=os.environ.get('GEOCODING_PROVIDER'),GEOCODING_PROVIDER_URL=os.environ.get('GEOCODING_PROVIDER_URL'),
+        GEOCODING_LICENSE_CONFIRMED=os.environ.get('GEOCODING_LICENSE_CONFIRMED','false').lower()=='true',
         SMTP_HOST=os.environ.get('SMTP_HOST'),SMTP_PORT=int(os.environ.get('SMTP_PORT','587')),
         SMTP_USER=os.environ.get('SMTP_USER'),SMTP_PASSWORD=os.environ.get('SMTP_PASSWORD'),SMTP_FROM=os.environ.get('SMTP_FROM'),
         EMAIL_DELIVERY_MODE=os.environ.get('EMAIL_DELIVERY_MODE','deferred'),
@@ -44,7 +47,7 @@ def create_app(config=None):
     @app.before_request
     def identify_request():
         g.request_id=str(uuid.uuid4());g.request_started=time.perf_counter()
-    from . import auth,admin,competition,scoring,reports,weather,operations,ui,live
+    from . import auth,admin,competition,scoring,reports,weather,operations,ui,live,locations
     auth.init_auth(app)
     @app.before_request
     def rate_limit_api():
@@ -60,7 +63,7 @@ def create_app(config=None):
             _throttle('public_limit',session['visitor_rate_id'],180,1)
         elif path in ('/api/v1/exports','/api/v1/reports/export','/api/v1/imports/preview') and request.method in ('POST','GET'):
             _throttle('report_limit',session.get('auth_session_id') or request.remote_addr or 'local',30,1)
-    for module in (auth,admin,competition,scoring,reports,weather,operations,ui,live):app.register_blueprint(module.bp)
+    for module in (auth,admin,competition,scoring,reports,weather,operations,ui,live,locations):app.register_blueprint(module.bp)
     reports.init_reports(app)
     from .cli import init_cli
     init_cli(app)

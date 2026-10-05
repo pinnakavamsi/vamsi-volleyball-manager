@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from volleyball.common import APIError, now
 from volleyball.db import get_db, set_scope
-from volleyball.models import Court, Division, Entry, Match, ResultRevision, RuleVersion, Stage, Team, Tournament, Venue
+from volleyball.models import Court, Division, Entry, Match, ResultRevision, RuleVersion, Stage, Team, Tournament, TournamentVenue, Venue
 from volleyball.services.formats import bracket, round_robin
 from volleyball.services.rankings import standings
 from volleyball.services.rules import DEFAULT_RULES, effective_rules, match_winner, set_winner, validate_rules
@@ -34,6 +34,8 @@ def competition_case(app, admin_client, demo):
         venue = Venue(organization_id=oid, name="Policy test venue", timezone="America/New_York")
         db.add(venue)
         db.flush()
+        event.settings = {**(event.settings or {}), 'venue_ids': [venue.id]}
+        db.add(TournamentVenue(organization_id=oid, tournament_id=event.id, venue_id=venue.id, active=True))
         court = Court(organization_id=oid, venue_id=venue.id, name="Policy test court")
         db.add(court)
         db.flush()

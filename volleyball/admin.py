@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import re
 import secrets
+import math
 from datetime import datetime
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Blueprint, g, request
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, delete, func, or_, select
 from werkzeug.security import generate_password_hash
 
 from .auth import (PERMISSIONS, issue_token,
@@ -17,7 +18,7 @@ from .auth import (PERMISSIONS, issue_token,
 from .common import APIError, audit, body, iso, now, serialize
 from .db import get_db, set_scope
 from .models import (Announcement, Audit, Court, CourtAssignment, Entry, Match, Membership,
-    Organization, ScorerSession, Team, Token, Tournament, User, Venue)
+    Organization, ScorerSession, Team, Token, Tournament, User, Venue, WeatherCache)
 
 bp = Blueprint("admin", __name__, url_prefix="/api/v1")
 
@@ -489,10 +490,18 @@ def team_update(team_id):
 @bp.route("/venues", methods=["GET", "POST"])
 @require_org("read")
 def venues():
+    from .locations import visible_venue_query
     if request.method == "GET":
-        return _paged(select(Venue).where(Venue.organization_id == g.organization.id).order_by(Venue.name))
+        query = visible_venue_query()
+        if request.args.get('tournament_id'):
+            from .competition import owned
+            from .locations import tournament_venue_ids
+            query = query.where(Venue.id.in_(tournament_venue_ids(owned(Tournament, request.args['tournament_id']))))
+        return _paged(query.order_by(Venue.name))
     if "schedule" not in PERMISSIONS[g.membership.role]:
         raise APIError("Your role cannot create venues.", 403, "forbidden")
+    if scoped_tournament_ids():
+        raise APIError('Add the venue from an assigned tournament so it is saved in your permitted scope.', 403, 'forbidden')
     venue = Venue(organization_id=g.organization.id)
     _update_venue(venue, body(), create=True)
     get_db().add(venue)
@@ -503,7 +512,16 @@ def venues():
 
 
 def _update_venue(venue, data, create=False):
+    from .locations import resolve_selection
+    prior_address, prior_timezone = venue.address, venue.timezone
     prior_coordinates = (venue.latitude, venue.longitude)
+    selected = None
+    if data.get('address_selection_token') or data.get('address_id'):
+        if 'latitude' in data or 'longitude' in data:
+            raise APIError('Use the selected address without supplying map coordinates.')
+        selected = resolve_selection(data.get('address_selection_token'), data.get('address_id'))
+        if 'address' in data and text(data['address'], 'Address', 1000, False) != selected['address']:
+            raise APIError('The address changed after selection. Choose a matching address suggestion again.')
     for key, validator in {"name": lambda v: text(v, "Venue name"), "address": lambda v: text(v, "Address", 1000, False),
                            "timezone": timezone, "indoor": lambda v: bool_value(v, "Indoor")}.items():
         if key in data:
@@ -512,15 +530,22 @@ def _update_venue(venue, data, create=False):
         raise APIError("A venue name is required.")
     if create and not venue.timezone:
         venue.timezone = g.organization.timezone
+    address_changed = prior_address != venue.address
+    if address_changed:
+        venue.latitude = venue.longitude = None
+        venue.settings = {**(venue.settings or {}), 'coordinates_verified': False,
+                          'address_source': 'manual', 'address_attribution': None}
     for field, maximum in (("latitude", 90), ("longitude", 180)):
         if field in data:
             value = data[field]
             if value is not None:
                 try:
+                    if isinstance(value, bool):
+                        raise ValueError()
                     value = float(value)
                 except (ValueError, TypeError):
                     raise APIError(f"{field} must be a number.")
-                if not -maximum <= value <= maximum:
+                if not math.isfinite(value) or not -maximum <= value <= maximum:
                     raise APIError(f"{field} is outside the valid range.")
             setattr(venue, field, value)
     if (venue.latitude is None) != (venue.longitude is None):
@@ -528,9 +553,22 @@ def _update_venue(venue, data, create=False):
     if prior_coordinates != (venue.latitude, venue.longitude):
         venue.settings = {**(venue.settings or {}), "coordinates_verified": False}
     if "settings" in data:
-        venue.settings = {**(venue.settings or {}), **_availability(data["settings"])}
+        settings = _availability(data['settings'])
+        if settings.get('coordinates_verified') and not ((venue.settings or {}).get('coordinates_verified') or (selected and selected['verified'])):
+            raise APIError('Choose a saved address or address suggestion to verify the venue location.')
+        venue.settings = {**(venue.settings or {}), **settings}
+    if selected:
+        venue.address = selected['address']
+        venue.latitude, venue.longitude = selected['latitude'], selected['longitude']
+        if 'timezone' not in data and selected.get('timezone'):
+            venue.timezone = timezone(selected['timezone'])
+        venue.settings = {**(venue.settings or {}), 'coordinates_verified': selected['verified'],
+                          'address_source': selected['source'], 'address_attribution': selected['attribution']}
     if (venue.settings or {}).get("coordinates_verified") and venue.latitude is None:
         raise APIError("Provide both map coordinates before marking the location verified.")
+    if not create and (prior_address != venue.address or prior_timezone != venue.timezone
+            or prior_coordinates != (venue.latitude, venue.longitude) or selected):
+        get_db().execute(delete(WeatherCache).where(WeatherCache.organization_id == g.organization.id, WeatherCache.venue_id == venue.id))
 
 
 def _availability(value):
@@ -579,7 +617,9 @@ def _availability(value):
 @bp.patch("/venues/<venue_id>")
 @require_org("schedule")
 def venue_update(venue_id):
+    from .locations import guard_shared_venue_change
     venue, data = _owned(Venue, venue_id, lock=True), body()
+    guard_shared_venue_change(venue)
     before = serialize(venue)
     _update_venue(venue, data)
     audit("venue.updated", "venue", venue.id, before=before, after=serialize(venue))
@@ -590,15 +630,24 @@ def venue_update(venue_id):
 @bp.route("/courts", methods=["GET", "POST"])
 @require_org("read")
 def courts():
+    from .locations import visible_venue_query
     if request.method == "GET":
         assignments = {r.court_id: r for r in get_db().scalars(select(CourtAssignment).where(
             CourtAssignment.organization_id == g.organization.id, CourtAssignment.released_at.is_(None)))}
-        query = select(Court).where(Court.organization_id == g.organization.id).order_by(Court.name)
+        query = select(Court).where(Court.organization_id == g.organization.id,
+            Court.venue_id.in_(visible_venue_query().with_only_columns(Venue.id))).order_by(Court.name)
         if request.args.get("venue_id"):
             query = query.where(Court.venue_id == valid_id(request.args["venue_id"]))
+        if request.args.get('tournament_id'):
+            from .competition import owned
+            from .locations import tournament_venue_ids
+            event = owned(Tournament, request.args['tournament_id'])
+            query = query.where(Court.venue_id.in_(tournament_venue_ids(event)))
         return _paged(query, lambda c: court_json(c, assignments.get(c.id)))
     if "schedule" not in PERMISSIONS[g.membership.role]:
         raise APIError("Your role cannot create courts.", 403, "forbidden")
+    if scoped_tournament_ids():
+        raise APIError('Add the court from an assigned tournament.', 403, 'forbidden')
     data = body()
     venue = _owned(Venue, data.get("venue_id"))
     court = Court(organization_id=g.organization.id, venue_id=venue.id, name=text(data.get("name"), "Court name", 120),
@@ -613,7 +662,9 @@ def courts():
 @bp.patch("/courts/<court_id>")
 @require_org("schedule")
 def court_update(court_id):
+    from .locations import guard_shared_venue_change
     court, data = _owned(Court, court_id, lock=True), body()
+    guard_shared_venue_change(_owned(Venue, court.venue_id))
     before = serialize(court)
     assignment = get_db().scalar(select(CourtAssignment).where(CourtAssignment.court_id == court.id,
         CourtAssignment.organization_id == g.organization.id, CourtAssignment.released_at.is_(None)))
@@ -622,7 +673,13 @@ def court_update(court_id):
     if "name" in data:
         court.name = text(data["name"], "Court name", 120)
     if "venue_id" in data:
-        court.venue_id = _owned(Venue, data["venue_id"]).id
+        target = _owned(Venue, data['venue_id'])
+        guard_shared_venue_change(target)
+        if target.id != court.venue_id and get_db().scalar(select(CourtAssignment.id).where(
+                CourtAssignment.organization_id == g.organization.id, CourtAssignment.court_id == court.id).limit(1)):
+            raise APIError('This court has game history at its current venue. Create a new court at the other venue to preserve those records.',
+                           409, 'court_history_exists')
+        court.venue_id = target.id
     if "available" in data:
         court.available = bool_value(data["available"], "Available")
     if "settings" in data:
@@ -630,6 +687,114 @@ def court_update(court_id):
     audit("court.updated", "court", court.id, before=before, after=serialize(court))
     get_db().commit()
     return {"court": court_json(court, assignment)}
+
+
+def _tournament_venue_items(event):
+    from .locations import tournament_venue_ids
+    ids = tournament_venue_ids(event)
+    db = get_db()
+    venues = db.scalars(select(Venue).where(Venue.organization_id == g.organization.id, Venue.id.in_(ids)).order_by(Venue.name)).all()
+    courts = db.scalars(select(Court).where(Court.organization_id == g.organization.id, Court.venue_id.in_(ids)).order_by(Court.name)).all()
+    assignments = {row.court_id: row for row in db.scalars(select(CourtAssignment).where(
+        CourtAssignment.organization_id == g.organization.id, CourtAssignment.court_id.in_([court.id for court in courts]),
+        CourtAssignment.released_at.is_(None)))}
+    return [{**serialize(venue), 'courts': [court_json(court, assignments.get(court.id)) for court in courts if court.venue_id == venue.id]}
+            for venue in venues]
+
+
+def _add_tournament_court(event, venue, data):
+    from .locations import guard_shared_venue_change
+    if not isinstance(data, dict):
+        raise APIError('Each court must contain its name and optional availability details.')
+    guard_shared_venue_change(venue)
+    court_name = text(data.get('name'), 'Court name', 120)
+    if get_db().scalar(select(Court.id).where(Court.organization_id == g.organization.id, Court.venue_id == venue.id,
+            func.lower(Court.name) == court_name.lower()).limit(1)):
+        raise APIError('A court with this name already exists at the venue. Choose another name.', 409, 'court_name_exists')
+    row = Court(organization_id=g.organization.id, venue_id=venue.id, name=court_name,
+                available=bool_value(data.get('available', True), 'Available'), settings=_availability(data.get('settings', {})))
+    get_db().add(row)
+    get_db().flush()
+    audit('court.created', 'court', row.id, after={**serialize(row), 'tournament_id': event.id})
+    return row
+
+
+@bp.route('/tournaments/<tournament_id>/venues', methods=['GET', 'POST'])
+@require_org('read')
+def tournament_venues(tournament_id):
+    from .competition import owned, sync_venues
+    from .locations import tournament_venue_ids, visible_venue_query
+    event = owned(Tournament, tournament_id, lock=request.method == 'POST')
+    if request.method == 'GET':
+        ids = tournament_venue_ids(event)
+        available = get_db().scalars(visible_venue_query().where(Venue.id.not_in(ids)).order_by(Venue.name).limit(500)).all()
+        return {'items': _tournament_venue_items(event), 'available': [serialize(venue) for venue in available],
+                'tournament_id': event.id, 'can_add_later': True}
+    if 'schedule' not in PERMISSIONS[g.membership.role]:
+        raise APIError('Your role cannot manage tournament venues.', 403, 'forbidden')
+    data, db = body(), get_db()
+    courts = data.get('courts', [])
+    if not isinstance(courts, list) or len(courts) > 50:
+        raise APIError('Add at most 50 courts at a time.')
+    if data.get('venue_id'):
+        if 'venue' in data:
+            raise APIError('Choose a saved venue or create a new venue.')
+        from .locations import saved_address
+        venue = saved_address(data['venue_id'])
+    else:
+        venue_data = data.get('venue')
+        if not isinstance(venue_data, dict):
+            raise APIError('Provide venue details, or choose an existing saved venue.')
+        venue = Venue(organization_id=g.organization.id)
+        _update_venue(venue, {**{'timezone': event.timezone}, **venue_data}, create=True)
+        db.add(venue)
+        db.flush()
+        audit('venue.created', 'venue', venue.id, after={**serialize(venue), 'tournament_id': event.id})
+    before_ids = tournament_venue_ids(event)
+    venue_ids = list(dict.fromkeys([*before_ids, venue.id]))
+    if len(venue_ids) > 50:
+        raise APIError('A tournament may have at most 50 venues.')
+    event.settings = {**(event.settings or {}), 'venue_ids': venue_ids}
+    sync_venues(event, venue_ids)
+    db.flush()
+    added_courts = [_add_tournament_court(event, venue, row) for row in courts]
+    audit('tournament.venue_added', 'tournament', event.id, before={'venue_ids': before_ids},
+          after={'venue_ids': venue_ids, 'court_ids': [row.id for row in added_courts]})
+    db.commit()
+    return {'venue': serialize(venue), 'items': _tournament_venue_items(event), 'tournament_id': event.id}, 201
+
+
+@bp.delete('/tournaments/<tournament_id>/venues/<venue_id>')
+@require_org('schedule')
+def remove_tournament_venue(tournament_id, venue_id):
+    from .competition import owned, sync_venues
+    from .locations import guard_venue_removal, tournament_venue_ids
+    event = owned(Tournament, tournament_id, lock=True)
+    venue = _owned(Venue, venue_id)
+    before_ids = tournament_venue_ids(event)
+    if venue.id not in before_ids:
+        raise APIError('This venue is not attached to the tournament.', 404, 'not_found')
+    guard_venue_removal(event, [venue.id])
+    venue_ids = [identifier for identifier in before_ids if identifier != venue.id]
+    event.settings = {**(event.settings or {}), 'venue_ids': venue_ids}
+    sync_venues(event, venue_ids)
+    audit('tournament.venue_removed', 'tournament', event.id, before={'venue_ids': before_ids}, after={'venue_ids': venue_ids})
+    get_db().commit()
+    return {'items': _tournament_venue_items(event), 'tournament_id': event.id}
+
+
+@bp.post('/tournaments/<tournament_id>/venues/<venue_id>/courts')
+@require_org('schedule')
+def add_tournament_court(tournament_id, venue_id):
+    from .competition import owned
+    from .locations import tournament_venue_ids
+    event = owned(Tournament, tournament_id, lock=True)
+    venue = _owned(Venue, venue_id, lock=True)
+    if venue.id not in tournament_venue_ids(event):
+        raise APIError('Add this venue to the tournament before adding its courts.', 409, 'tournament_venue_required')
+    court = _add_tournament_court(event, venue, body())
+    get_db().commit()
+    return {'court': court_json(court)}, 201
 
 
 @bp.get("/dashboard")

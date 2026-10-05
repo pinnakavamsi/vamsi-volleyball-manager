@@ -32,10 +32,16 @@ def assign_court(match,court_id,user_id=None,reason=None):
     old=assignment(match)
     if old and old.court_id==court_id:return old
     if match.status in ('in_progress','paused') and not reason:raise APIError('Moving an active game requires confirmation and a reason.')
-    # Every caller locks its match first, then all courts in UUID order.
+    # Caller locks the tournament, then match; court locks follow UUID order.
     ids=sorted(set([court_id]+([old.court_id] if old else [])))
     courts={c.id:c for c in db.scalars(select(Court).where(Court.id.in_(ids),Court.organization_id==match.organization_id).order_by(Court.id).with_for_update())}
     court=courts.get(court_id);check_court(court)
+    from ..locations import tournament_venue_ids
+    tournament=db.scalar(select(Tournament).where(Tournament.id==match.tournament_id,
+        Tournament.organization_id==match.organization_id).execution_options(populate_existing=True))
+    if court.venue_id not in tournament_venue_ids(tournament):
+        raise APIError('Add this venue to the tournament before assigning its court. Open the tournament Venues & courts page.',
+                       409,'tournament_venue_required')
     occupied=db.scalar(select(CourtAssignment).where(CourtAssignment.court_id==court_id,CourtAssignment.released_at.is_(None)))
     if occupied:
         other=db.get(Match,occupied.match_id)

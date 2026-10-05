@@ -9,8 +9,8 @@ import pytest
 from sqlalchemy import event, select
 
 from volleyball.db import get_db, set_scope
-from volleyball.models import (CourtAssignment, Division, Entry, Match, MatchEvent,
-    ResultRevision, ScorerSession, Stage, Tournament)
+from volleyball.models import (Court, CourtAssignment, Division, Entry, Match, MatchEvent,
+    ResultRevision, ScorerSession, Stage, Tournament, TournamentVenue)
 from volleyball.services.rankings import compare_pools
 from volleyball.services.recovery import journal_projection, rebuild
 from volleyball.services.rules import validate_rules
@@ -124,11 +124,14 @@ def test_simultaneous_starts_of_shared_team_across_events(app, admin_client, gam
     with app.app_context():
         set_scope(case['org_id'])
         db = get_db()
+        venue_id = db.get(Court, case['courts'][1]).venue_id
         tournament = Tournament(organization_id=case['org_id'], name='Shared team event',
             slug='shared-' + uuid4().hex[:12], start_date=date.today(), end_date=date.today() + timedelta(days=2),
-            timezone='America/New_York', status='published', visibility='private', rules=validate_rules({}))
+            timezone='America/New_York', status='published', visibility='private', rules=validate_rules({}),
+            settings={'venue_ids': [venue_id]})
         db.add(tournament)
         db.flush()
+        db.add(TournamentVenue(organization_id=case['org_id'], tournament_id=tournament.id, venue_id=venue_id, active=True))
         division = Division(organization_id=case['org_id'], tournament_id=tournament.id, name='Shared identity')
         db.add(division)
         db.flush()

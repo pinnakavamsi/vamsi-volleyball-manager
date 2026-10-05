@@ -31,11 +31,13 @@ import {
   imageTag,
   contrastText,
 } from "./common.js";
+import { addressFields, bindAddressSearch } from "./locations.js";
 let organizerLayout = {},
   identity,
   org,
   dashboard,
   tournament,
+  tournamentLocations,
   routeToken = 0,
   refreshTimer,
   refreshCleanup,
@@ -48,7 +50,7 @@ const nav = [
   ["tournaments", "Tournaments", "trophy"],
   ["schedule", "Schedule", "calendar"],
   ["teams", "Teams", "team"],
-  ["venues", "Venues & courts", "court"],
+  ["venues", "Address book", "location"],
   ["reports", "Reports", "chart"],
   ["staff", "Organizer staff", "shield"],
   ["settings", "Settings", "settings"],
@@ -639,7 +641,7 @@ function newTournament() {
   );
   modal(
     "Create a competition",
-    `<div class="setup-steps"><div class="step active"><span>1</span> Essentials</div><div class="step"><span>2</span> Divisions & teams</div><div class="step"><span>3</span> Rules & schedule</div><div class="step"><span>4</span> Review</div></div><p class="muted small">Save a private draft, then add divisions, teams, rules, and fixtures before publishing.</p><div class="form-grid">${field("name", "Competition name", "text", "", 'required maxlength="180" placeholder="e.g. Autumn Open 2026"')}${select("competition_type", "Competition type", ["tournament", "league"])}${field("start_date", "Start date", "date", today, "required")}${field("end_date", "End date", "date", today, "required")}${field("timezone", "IANA timezone", "text", org.timezone || "America/New_York", "required")}<div class="full">${textarea("description", "Description")}</div></div>`,
+    `<div class="setup-steps"><div class="step active"><span>1</span> Essentials</div><div class="step"><span>2</span> Divisions & teams</div><div class="step"><span>3</span> Rules & schedule</div><div class="step"><span>4</span> Review</div></div><p class="muted small">Save a private draft, then add divisions, teams, venues, courts, and fixtures. Venue details can be added later from the tournament's Venues & courts tab.</p><div class="form-grid">${field("name", "Competition name", "text", "", 'required maxlength="180" placeholder="e.g. Autumn Open 2026"')}${select("competition_type", "Competition type", ["tournament", "league"])}${field("start_date", "Start date", "date", today, "required")}${field("end_date", "End date", "date", today, "required")}${field("timezone", "IANA timezone", "text", org.timezone || "America/New_York", "required")}<div class="full">${textarea("description", "Description")}</div></div>`,
     async (fd) => {
       const result = await api("/tournaments", {
         method: "POST",
@@ -657,6 +659,7 @@ async function eventPage(id, tab) {
   const tabs = [
     "overview",
     "divisions",
+    "venues",
     "rules",
     "schedule",
     "results",
@@ -668,6 +671,7 @@ async function eventPage(id, tab) {
   let content;
   if (tab === "overview") content = eventOverview();
   else if (tab === "divisions") content = divisionsView();
+  else if (tab === "venues") content = await eventVenuesView(id);
   else if (tab === "rules") content = rulesView();
   else if (tab === "schedule") content = scheduleView();
   else if (tab === "results") content = resultsView();
@@ -681,13 +685,13 @@ async function eventPage(id, tab) {
       `${pretty(t.competition_type)} · ${date(t.start_date)} – ${date(t.end_date)} · ${t.timezone}`,
       `<div class="button-group">${t.visibility === "public" ? `<a class="button secondary" href="/t/${esc(t.slug)}" target="_blank" rel="noopener">${icon("link")}Public page</a>` : ""}${can("manage") ? `<button class="button primary" id="edit-event">${icon("settings")}Edit details</button>` : ""}</div>`,
     ) +
-    `<div class="button-group" style="margin-bottom:18px">${badge(t.status)}${badge(t.visibility)}${org.demo ? badge("demo") : ""}<span class="muted small" id="event-summary-counts">${items(tournament.divisions).length} divisions · ${items(tournament.entries).length} entries · ${items(tournament.matches).length} fixtures</span></div><nav class="tabs" aria-label="Tournament sections">${tabs.map((x) => `<a href="#tournaments/${id}/${x}" class="tab ${x === tab ? "active" : ""}">${pretty(x)}</a>`).join("")}</nav>${content}`
+    `<div class="button-group" style="margin-bottom:18px">${badge(t.status)}${badge(t.visibility)}${org.demo ? badge("demo") : ""}<span class="muted small" id="event-summary-counts">${items(tournament.divisions).length} divisions · ${items(tournament.entries).length} entries · ${items(tournament.matches).length} fixtures</span></div><nav class="tabs" aria-label="Tournament sections">${tabs.map((x) => `<a href="#tournaments/${id}/${x}" class="tab ${x === tab ? "active" : ""}">${x === "venues" ? "Venues & courts" : pretty(x)}</a>`).join("")}</nav>${content}`
   );
 }
 function eventOverview(d = tournament) {
   const ms = items(d.matches),
     live = ms.filter((m) => ["in_progress", "paused"].includes(m.status));
-  return `${overviewFreshness()}<div class="metric-grid" id="overview-metrics">${metric("Tournament entries", items(d.entries).length, "Entries across every division", "team")}${metric("Scheduled games", ms.filter((m) => ["scheduled", "ready"].includes(m.status)).length, "Pending fixture starts", "calendar")}${metric("Live games", live.length, "Active and paused matches", "court")}${metric("Results to approve", ms.filter((m) => m.result_status === "submitted").length, "Referee submitted results", "check")}</div><div class="dashboard-grid"><div class="stack"><section class="panel"><header class="panel-heading"><div><h2>Live games</h2><p>Authoritative scores updated every 2 seconds</p></div></header><div class="live-cards" id="live-cards">${live.map((m) => organizerCard(m)).join("") || empty("No games in progress")}</div></section><section class="panel"><header class="panel-heading"><div><h2>Upcoming games</h2></div></header><div id="overview-upcoming">${fixtureTable(upcomingMatches(ms).slice(0, 8))}</div></section></div><div class="stack"><section class="panel"><header class="panel-heading"><h2>Court operations</h2></header><div class="court-list" id="overview-courts">${
+  return `${overviewFreshness()}${!items(d.venues).length || !items(d.courts).length ? `<div class="venue-setup-notice"><div><strong>${items(d.venues).length ? "Add courts when your venue is ready" : "Venue details can be added later"}</strong><p>Set up this tournament's venues and courts before assigning games. Choose an address suggestion for venue weather.</p></div><a class="button secondary" href="#tournaments/${esc(d.tournament.id)}/venues">${can("schedule") ? "Set up venues & courts" : "View venues & courts"}${icon("arrow")}</a></div>` : ""}<div class="metric-grid" id="overview-metrics">${metric("Tournament entries", items(d.entries).length, "Entries across every division", "team")}${metric("Scheduled games", ms.filter((m) => ["scheduled", "ready"].includes(m.status)).length, "Pending fixture starts", "calendar")}${metric("Live games", live.length, "Active and paused matches", "court")}${metric("Results to approve", ms.filter((m) => m.result_status === "submitted").length, "Referee submitted results", "check")}</div><div class="dashboard-grid"><div class="stack"><section class="panel"><header class="panel-heading"><div><h2>Live games</h2><p>Authoritative scores updated every 2 seconds</p></div></header><div class="live-cards" id="live-cards">${live.map((m) => organizerCard(m)).join("") || empty("No games in progress")}</div></section><section class="panel"><header class="panel-heading"><div><h2>Upcoming games</h2></div></header><div id="overview-upcoming">${fixtureTable(upcomingMatches(ms).slice(0, 8))}</div></section></div><div class="stack"><section class="panel"><header class="panel-heading"><h2>Court operations</h2></header><div class="court-list" id="overview-courts">${
     items(d.courts)
       .map((c) => courtRow(c, items(d.venues)))
       .join("") || empty("No eligible courts")
@@ -929,34 +933,51 @@ async function venuesPage() {
   dashboard = { ...dashboard, venues: items(vs), courts: items(cs) };
   return (
     heading(
-      "Venues & courts",
-      "Availability follows active court assignments and reservations.",
+      "Address book",
+      "Saved venues and addresses for reuse. Add venues and courts to each tournament from its Venues & courts tab.",
       can("schedule")
         ? `<div class="button-group"><button class="button secondary" data-create="court">${icon("plus")}Add court</button><button class="button primary" data-create="venue">${icon("plus")}Add venue</button></div>`
         : "",
     ) +
     `<div class="record-grid">${
       items(vs)
-        .map(
-          (v) =>
-            `<article class="panel record-card"><div class="record-top"><span class="tournament-symbol">${icon("location")}</span>${badge(v.indoor ? "indoor" : "outdoor")}</div><h2>${esc(v.name)}</h2><p>${esc(v.address || "Address not recorded")}</p><p class="small">${esc(v.timezone)} · ${v.latitude != null && v.longitude != null ? `${esc(v.latitude)}, ${esc(v.longitude)}` : "Map position not verified"}</p><div class="court-list" style="padding:0">${
-              items(cs)
-                .filter((c) => c.venue_id === v.id)
-                .map(
-                  (c) =>
-                    `<div>${courtRow(c, items(vs))}${can("schedule") ? `<button class="row-action" data-edit-court="${esc(c.id)}">Edit availability & hours</button>` : ""}</div>`,
-                )
-                .join("") ||
-              '<p class="muted small">No courts at this venue.</p>'
-            }</div><div class="record-footer">${can("schedule") ? `<button class="button secondary" data-edit-venue="${esc(v.id)}">Edit venue</button>` : ""}${v.latitude != null ? `<a class="button ghost" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(v.latitude + "," + v.longitude)}" target="_blank" rel="noopener">Navigate ${icon("arrow")}</a>` : ""}</div></article>`,
-        )
+        .map((v) => venueCard(v, items(cs)))
         .join("") ||
       empty(
-        "No venues configured",
-        "Add a venue and courts before assigning a game.",
+        "Your address book is empty",
+        "Save a venue here or add it directly to a tournament. Addresses are saved for your organization to reuse.",
       )
     }</div>`
   );
+}
+function venueCard(venue, courts = [], tournamentId = "") {
+  const venueCourts = courts.filter((court) => court.venue_id === venue.id);
+  const resolved = venue.latitude != null && venue.longitude != null && venue.settings?.coordinates_verified;
+  return `<article class="panel record-card venue-card"><div class="record-top"><span class="tournament-symbol">${icon("location")}</span>${badge(venue.indoor ? "indoor" : "outdoor")}</div><h2>${esc(venue.name)}</h2><p>${esc(venue.address || "Address can be added later")}</p><p class="small muted">${esc(venue.timezone)} · ${resolved ? "Address ready for weather" : "Choose an address suggestion to enable weather"}</p><div class="court-list" style="padding:0">${venueCourts.map((court) => `<div>${courtRow(court, [venue])}${can("schedule") ? `<button class="row-action" data-edit-court="${esc(court.id)}">Edit availability & hours</button>` : ""}</div>`).join("") || '<p class="muted small">No courts yet. Add them when the venue details are ready.</p>'}</div><div class="record-footer">${can("schedule") ? `<button class="button secondary" data-edit-venue="${esc(venue.id)}">Edit venue</button>${tournamentId ? `<button class="button primary" data-tournament-add-court="${esc(venue.id)}">${icon("plus")}Add court</button><button class="button ghost" data-tournament-remove-venue="${esc(venue.id)}">Remove from tournament</button>` : ""}` : ""}${venue.address ? `<a class="button ghost" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venue.address)}" target="_blank" rel="noopener">Directions ${icon("arrow")}</a>` : ""}</div></article>`;
+}
+async function eventVenuesView(id) {
+  tournamentLocations = await api(`/tournaments/${id}/venues`);
+  const venues = items(tournamentLocations.items);
+  const courts = venues.flatMap((venue) => items(venue.courts));
+  const available = items(tournamentLocations.available).filter((venue) => !venues.some((linked) => linked.id === venue.id));
+  return `<div class="page-heading"><div><h2>Venues & courts</h2><p>${venues.length} venues · ${courts.length} courts in this tournament. Add details now or return later.</p></div>${can("schedule") ? `<div class="button-group"><button class="button secondary" id="reuse-event-venue" ${available.length ? "" : "disabled"}>Use saved venue</button><button class="button primary" id="add-event-venue">${icon("plus")}Add venue</button></div>` : ""}</div><div class="record-grid">${venues.map((venue) => venueCard(venue, courts, id)).join("") || empty("Choose where this tournament will play", "Add a new venue or reuse one from your address book. You can leave this step until the venue is confirmed.")}</div><section class="panel panel-pad section-gap"><h2>Weather for this tournament</h2><p class="muted small">Forecasts use each venue's selected address and the tournament dates. Up to seven available event days are shown.</p><div id="weather-panel"><p class="muted small">Loading available event forecasts…</p></div></section>`;
+}
+function reuseEventVenue(id) {
+  const attached = items(tournamentLocations?.items);
+  const available = items(tournamentLocations?.available).filter((venue) => !attached.some((linked) => linked.id === venue.id));
+  modal("Use a saved venue", `<p class="muted small">The venue and its courts become available to this tournament. Saved venue details are shared by tournaments that use them.</p>${select("venue_id", "Address book venue", available.map((venue) => [venue.id, `${venue.name}${venue.address ? " · " + venue.address : ""}`]), "", "required")}`, async (fd) => {
+    await api(`/tournaments/${id}/venues`, { method: "POST", data: { venue_id: fd.get("venue_id") } });
+    toast("Saved venue added to this tournament.");
+    await render();
+  }, { submit: "Add to tournament" });
+}
+function removeEventVenue(id, venueId) {
+  const venue = items(tournamentLocations?.items).find((row) => row.id === venueId);
+  modal("Remove venue from tournament", `<p>Remove ${esc(venue?.name || "this venue")} from this tournament? The saved venue and its courts stay in the address book.</p><p class="form-help">A venue with assigned games cannot be removed. Move those games to another tournament venue first.</p>`, async () => {
+    await api(`/tournaments/${id}/venues/${venueId}`, { method: "DELETE" });
+    toast("Venue removed from this tournament.");
+    await render();
+  }, { submit: "Remove from tournament" });
 }
 async function staffPage() {
   const staff = items(await api("/memberships"));
@@ -1421,6 +1442,16 @@ function bindPage(page, id, tab) {
     .querySelector("#status-filter")
     ?.addEventListener("change", filterRecords);
   document.querySelector("#edit-event")?.addEventListener("click", editEvent);
+  document.querySelector("#add-event-venue")?.addEventListener("click", () =>
+    recordForm("venue", {}, { tournamentId: id }),
+  );
+  document.querySelector("#reuse-event-venue")?.addEventListener("click", () => reuseEventVenue(id));
+  document.querySelectorAll("[data-tournament-add-court]").forEach((button) =>
+    (button.onclick = () => recordForm("court", {}, { tournamentId: id, venueId: button.dataset.tournamentAddCourt })),
+  );
+  document.querySelectorAll("[data-tournament-remove-venue]").forEach((button) =>
+    (button.onclick = () => removeEventVenue(id, button.dataset.tournamentRemoveVenue)),
+  );
   document.querySelector("#add-division")?.addEventListener("click", () =>
     modal(
       "Add division",
@@ -1602,8 +1633,7 @@ function bindPage(page, id, tab) {
   if (
     page === "tournaments" &&
     id &&
-    (!tab || tab === "overview") &&
-    organizerLayout.show_weather !== false
+    (((!tab || tab === "overview") && organizerLayout.show_weather !== false) || tab === "venues")
   )
     loadWeather(id);
   document
@@ -1986,7 +2016,7 @@ function availabilitySettings(fd, previous = {}, venue = false) {
   }
   return settings;
 }
-async function recordForm(type, r = {}) {
+async function recordForm(type, r = {}, context = {}) {
   const editing = !!r.id;
   let content;
   if (type === "team")
@@ -2005,24 +2035,28 @@ async function recordForm(type, r = {}) {
       field("phone", "Private contact phone", "tel", r.contact?.phone || "") +
       `<label class="check-field"><input type="checkbox" name="archived" ${r.archived ? "checked" : ""}>Archive reusable team record</label><p class="form-help">Existing event entry names and historical results are preserved.</p>`;
   else if (type === "venue")
-    content = `<div class="form-grid">${field("name", "Venue name", "text", r.name || "", "required")}${field("timezone", "IANA timezone", "text", r.timezone || org.timezone || "America/New_York", "required")}<div class="full">${textarea("address", "Street address", r.address || "")}</div>${field("latitude", "Verified latitude", "number", r.latitude ?? "", 'min="-90" max="90" step="any"')}${field("longitude", "Verified longitude", "number", r.longitude ?? "", 'min="-180" max="180" step="any"')}</div><label class="check-field"><input name="indoor" type="checkbox" ${r.indoor !== false ? "checked" : ""}>Indoor venue</label><label class="check-field"><input name="coordinates_verified" type="checkbox" ${r.settings?.coordinates_verified ? "checked" : ""}>I verified these map coordinates</label>${openingHoursFields(r.settings)}`;
+    content = `${editing ? '<p class="form-help">Changes update this saved venue and every tournament that uses it.</p>' : context.tournamentId ? '<p class="form-help">This venue will be added to the tournament and saved in your organization’s address book. Courts can be added later.</p>' : '<p class="form-help">Save this venue in your address book for use in tournaments.</p>'}<div class="form-grid">${field("name", "Venue name", "text", r.name || "", 'required maxlength="180"')}${field("timezone", "IANA timezone", "text", r.timezone || (context.tournamentId ? tournament?.tournament?.timezone : null) || org.timezone || "America/New_York", "required")}<div class="full">${addressFields(r.address || "")}</div></div><label class="check-field"><input name="indoor" type="checkbox" ${r.indoor !== false ? "checked" : ""}>Indoor venue</label>${openingHoursFields(r.settings)}`;
   else {
-    const vs = items(await api("/venues"));
+    const vs = context.venueId
+      ? items(tournamentLocations?.items).filter((venue) => venue.id === context.venueId)
+      : items(await api("/venues"));
     content =
       field("name", "Court name", "text", r.name || "", "required") +
-      select("venue_id", "Venue", options(vs), r.venue_id || "", "required") +
+      (context.venueId ? `<p class="form-help">Venue: ${esc(vs[0]?.name || "Selected tournament venue")}</p><input type="hidden" name="venue_id" value="${esc(context.venueId)}">` : select("venue_id", "Venue", options(vs), r.venue_id || "", "required")) +
       `<label class="check-field"><input name="available" type="checkbox" ${r.available !== false ? "checked" : ""}>Court available for eligible assignments</label>` +
       closureFields(r.settings) +
       '<p class="form-help">Operational occupancy is derived by the server. Changing availability does not release active matches.</p>';
   }
-  const path = "/" + { team: "teams", venue: "venues", court: "courts" }[type];
+  const path = context.tournamentId && !editing
+    ? type === "venue" ? `/tournaments/${context.tournamentId}/venues` : `/tournaments/${context.tournamentId}/venues/${context.venueId}/courts`
+    : "/" + { team: "teams", venue: "venues", court: "courts" }[type];
   modal(
     `${editing ? "Edit" : "Add"} ${type}`,
     content,
     async (fd) => {
       let data = formObject(
         fd,
-        ["latitude", "longitude"],
+        [],
         ["archived", "indoor", "available"],
       );
       if (type === "team") {
@@ -2033,11 +2067,8 @@ async function recordForm(type, r = {}) {
         delete data.available;
       }
       if (type === "venue") {
-        data.settings = {
-          ...availabilitySettings(fd, r.settings, true),
-          coordinates_verified: fd.has("coordinates_verified"),
-        };
-        delete data.coordinates_verified;
+        const availability = availabilitySettings(fd, r.settings, true);
+        data.settings = Object.fromEntries(Object.entries(availability).filter(([key]) => ["opening_hours", "closures", "layout_url", "reservation_minutes"].includes(key)));
         delete data.archived;
         delete data.available;
       }
@@ -2055,7 +2086,7 @@ async function recordForm(type, r = {}) {
       }
       await api(path + (editing ? "/" + r.id : ""), {
         method: editing ? "PATCH" : "POST",
-        data,
+        data: context.tournamentId && type === "venue" && !editing ? { venue: data } : data,
       });
       toast(`${pretty(type)} saved.`);
       render();
@@ -2063,6 +2094,7 @@ async function recordForm(type, r = {}) {
     { wide: type === "venue" },
   );
   if (type === "venue") {
+    bindAddressSearch(document.querySelector("#modal-form"), { tournamentId: context.tournamentId || (route().startsWith("tournaments/") ? tournament?.tournament.id : undefined) });
     const enabled = document.querySelector("[name=limit_opening_hours]"),
       hours = document.querySelector("#weekly-hours");
     const update = () => {
@@ -2137,10 +2169,9 @@ async function editMember(id) {
 }
 async function editEvent() {
   const t = tournament.tournament;
-  const venues = items(await api("/venues?limit=500"));
   modal(
     "Competition details",
-    `<div class="form-grid">${field("name", "Competition name", "text", t.name, "required")}${select("competition_type", "Type", ["tournament", "league"], t.competition_type, "disabled")}${field("start_date", "Start date", "date", t.start_date, "required")}${field("end_date", "End date", "date", t.end_date, "required")}${field("timezone", "IANA timezone", "text", t.timezone, "required")}<div class="full">${textarea("description", "Description", t.description)}</div>${field("rest_minutes", "Minimum rest between a team’s games (minutes)", "number", t.settings?.rest_minutes ?? 0, 'min="0" max="1440" required')}${field("buffer_minutes", "Court turnaround buffer (minutes)", "number", t.settings?.buffer_minutes ?? 0, 'min="0" max="1440" required')}<div class="full"><h3>Event venues</h3>${venues.length ? venues.map((v) => `<label class="check-field"><input type="checkbox" name="venue_ids" value="${esc(v.id)}" ${(t.settings?.venue_ids || []).includes(v.id) ? "checked" : ""}>${esc(v.name)}</label>`).join("") : '<p class="muted small">Create venues in Venues & courts first.</p>'}<label class="check-field"><input type="checkbox" name="public_rules" ${t.settings?.public_rules !== false ? "checked" : ""}>Show scoring rules on the public tournament page</label><p class="form-help">Schedule checks use the rest and turnaround policies. Fixture duration and slot spacing are set for each stage. Dates and fixture times use the event timezone.</p></div></div>`,
+    `<div class="form-grid">${field("name", "Competition name", "text", t.name, "required")}${select("competition_type", "Type", ["tournament", "league"], t.competition_type, "disabled")}${field("start_date", "Start date", "date", t.start_date, "required")}${field("end_date", "End date", "date", t.end_date, "required")}${field("timezone", "IANA timezone", "text", t.timezone, "required")}<div class="full">${textarea("description", "Description", t.description)}</div>${field("rest_minutes", "Minimum rest between a team’s games (minutes)", "number", t.settings?.rest_minutes ?? 0, 'min="0" max="1440" required')}${field("buffer_minutes", "Court turnaround buffer (minutes)", "number", t.settings?.buffer_minutes ?? 0, 'min="0" max="1440" required')}<div class="full"><p class="form-help">Add or update venue and court details from this tournament’s Venues & courts tab. These details can be added later.</p><label class="check-field"><input type="checkbox" name="public_rules" ${t.settings?.public_rules !== false ? "checked" : ""}>Show scoring rules on the public tournament page</label><p class="form-help">Schedule checks use the rest and turnaround policies. Fixture duration and slot spacing are set for each stage. Dates and fixture times use the event timezone.</p></div></div>`,
     async (fd) => {
       const v = formObject(
         fd,
@@ -2152,12 +2183,10 @@ async function editEvent() {
         rest_minutes: v.rest_minutes,
         buffer_minutes: v.buffer_minutes,
         public_rules: v.public_rules,
-        venue_ids: fd.getAll("venue_ids"),
       };
       delete v.rest_minutes;
       delete v.buffer_minutes;
       delete v.public_rules;
-      delete v.venue_ids;
       await api(`/tournaments/${t.id}`, { method: "PATCH", data: v });
       toast("Competition details saved.");
       render();
@@ -2629,15 +2658,19 @@ function hideQR() {
     message.hidden = true;
   }
 }
-async function openMatch(id) {
+async function openMatch(id, { notice = "", expectedForm } = {}) {
+  const routeAtOpen = location.hash;
+  const originalFormCurrent = () => location.hash === routeAtOpen && (!expectedForm || (expectedForm.isConnected && document.querySelector("#dialog").open && document.querySelector("#dialog form") === expectedForm));
+  if (!originalFormCurrent()) return;
   hideQR();
   activeMatchId = id;
-  const [detail, courts] = await Promise.all([
-    api(`/matches/${id}`),
-    api("/courts"),
-  ]);
+  const detail = await api(`/matches/${id}`);
   const m = detail.match || detail;
-  if (activeMatchId !== id) return;
+  if (activeMatchId !== id || !originalFormCurrent()) return;
+  const courts = await api(`/courts?tournament_id=${encodeURIComponent(m.tournament_id)}`);
+  if (activeMatchId !== id || !originalFormCurrent()) return;
+  const eligibleCourts = items(courts).filter((court) => court.status === "available" || court.id === m.court?.id);
+  if (m.court && !eligibleCourts.some((court) => court.id === m.court.id)) eligibleCourts.push(m.court);
   const matchTimezone =
     tournament?.tournament.id === m.tournament_id
       ? tournament.tournament.timezone
@@ -2645,11 +2678,12 @@ async function openMatch(id) {
           ?.timezone || org.timezone;
   modal(
     "Game preparation & result review",
-    `<div class="record-top">${badge(m.status)}${badge(m.result_status)}<span class="muted small">Version ${m.version}</span></div><h2 class="section-gap">${esc(teamName(m, "a"))} <span class="muted">vs</span> ${esc(teamName(m, "b"))}</h2><dl class="detail-list"><div><dt>Court</dt><dd>${esc(courtName(m))}</dd></div><div><dt>Planned time</dt><dd>${esc(dt(m.planned_at, { timeZone: tournament?.tournament.id === m.tournament_id ? tournament.tournament.timezone : items(dashboard?.tournaments).find((t) => t.id === m.tournament_id)?.timezone || org?.timezone }))}</dd></div><div><dt>Set scores</dt><dd>${esc(score(m))}</dd></div><div><dt>Referee</dt><dd>${esc(m.scorer?.name || m.referee_name || "No unverified referee name")}${m.scorer ? '<div class="muted small">' + (m.scorer.connected ? "Connected" : "Disconnected — game remains active") + " · " + esc(dt(m.scorer.last_seen_at)) + "</div>" : ""}</dd></div></dl>${rulesSummary(m.rules)}${can("manage") && !m.rule_snapshot ? '<button type="button" class="button secondary section-gap" id="match-rule-override">Override game scoring rules</button>' : ""}${can("schedule") ? `<div class="section-gap"><h3>Court assignment</h3><div class="filters">${select("court_id", "Eligible court", options(items(courts).filter((c) => c.available || c.id === m.court?.id)), m.court?.id || "", 'id="assign-court"')}<button type="button" class="button secondary" id="assign-court-action">Assign court</button>${m.status === "ready" ? '<button type="button" class="button ghost" id="release-court">Release reservation</button>' : ""}</div></div>` : ""}${can("manage") ? `<div class="section-gap"><h3>Delegated referee access</h3><p class="muted small">Assign a court, then show this game's referee QR for 10 seconds. Hiding the QR does not end a referee's scoring session.</p><div class="button-group"><button type="button" class="button primary" id="show-qr">Show QR Code</button><button type="button" class="button secondary" id="revoke-referee">Revoke referee access</button></div><div class="form-error" id="qr-message" role="alert" hidden></div><div class="qr-box" id="qr-content" role="region" aria-label="Private referee QR code" hidden></div></div>` : ""}${can("results") && m.status === "ended" ? `<div class="section-gap"><h3>Result review</h3><p class="muted small">${esc(score(m))} · ${esc(pretty(m.outcome || "played"))} · ${esc(pretty(m.result_status))}</p><div class="button-group">${m.result_status === "submitted" ? '<button type="button" class="button primary" id="approve-result">Approve official result</button>' : ""}${!m.winner_id && m.team_a && m.team_b ? '<button type="button" class="button secondary" id="resolve-winner">Resolve winner</button>' : ""}<button type="button" class="button secondary" id="correct-result">Correct with revision</button></div></div>` : ""}${can("results") || can("schedule") ? `<div class="section-gap"><h3>Game operations</h3><div class="button-group">${can("results") && m.result_status !== "finalized" ? '<button type="button" class="button secondary" id="match-outcome">Record exceptional outcome</button>' : ""}${can("schedule") ? '<button type="button" class="button secondary" id="edit-fixture">Revise fixture</button>' : ""}</div></div>` : ""}`,
+    `<div class="record-top">${badge(m.status)}${badge(m.result_status)}<span class="muted small">Version ${m.version}</span></div><h2 class="section-gap">${esc(teamName(m, "a"))} <span class="muted">vs</span> ${esc(teamName(m, "b"))}</h2><dl class="detail-list"><div><dt>Court</dt><dd>${esc(courtName(m))}</dd></div><div><dt>Planned time</dt><dd>${esc(dt(m.planned_at, { timeZone: tournament?.tournament.id === m.tournament_id ? tournament.tournament.timezone : items(dashboard?.tournaments).find((t) => t.id === m.tournament_id)?.timezone || org?.timezone }))}</dd></div><div><dt>Set scores</dt><dd>${esc(score(m))}</dd></div><div><dt>Referee</dt><dd>${esc(m.scorer?.name || m.referee_name || "No unverified referee name")}${m.scorer ? '<div class="muted small">' + (m.scorer.connected ? "Connected" : "Disconnected — game remains active") + " · " + esc(dt(m.scorer.last_seen_at)) + "</div>" : ""}</dd></div></dl>${rulesSummary(m.rules)}${can("manage") && !m.rule_snapshot ? '<button type="button" class="button secondary section-gap" id="match-rule-override">Override game scoring rules</button>' : ""}${can("schedule") ? `<div class="section-gap"><h3>Court assignment</h3><div id="court-message" class="form-help" role="status" ${notice ? "" : "hidden"}>${esc(notice)}</div>${!eligibleCourts.length ? `<p class="form-help">${items(courts).length ? "No tournament courts are currently available. Review court availability or release an unused reservation." : "Add a venue and court in this tournament first, from its Venues & courts tab."}</p>` : ""}<div class="filters">${select("court_id", "Eligible court", options(eligibleCourts), m.court?.id || "", 'id="assign-court"' + (eligibleCourts.length ? "" : " disabled"))}<button type="button" class="button secondary" id="assign-court-action" ${eligibleCourts.length ? "" : "disabled"}>Assign court</button>${m.status === "ready" ? '<button type="button" class="button ghost" id="release-court">Release reservation</button>' : ""}</div></div>` : ""}${can("manage") ? `<div class="section-gap"><h3>Delegated referee access</h3><p class="muted small">Assign a court, then show this game's referee QR for 10 seconds. Hiding the QR does not end a referee's scoring session.</p><div class="button-group"><button type="button" class="button primary" id="show-qr">Show QR Code</button><button type="button" class="button secondary" id="revoke-referee">Revoke referee access</button></div><div class="form-error" id="qr-message" role="alert" hidden></div><div class="qr-box" id="qr-content" role="region" aria-label="Private referee QR code" hidden></div></div>` : ""}${can("results") && m.status === "ended" ? `<div class="section-gap"><h3>Result review</h3><p class="muted small">${esc(score(m))} · ${esc(pretty(m.outcome || "played"))} · ${esc(pretty(m.result_status))}</p><div class="button-group">${m.result_status === "submitted" ? '<button type="button" class="button primary" id="approve-result">Approve official result</button>' : ""}${!m.winner_id && m.team_a && m.team_b ? '<button type="button" class="button secondary" id="resolve-winner">Resolve winner</button>' : ""}<button type="button" class="button secondary" id="correct-result">Correct with revision</button></div></div>` : ""}${can("results") || can("schedule") ? `<div class="section-gap"><h3>Game operations</h3><div class="button-group">${can("results") && m.result_status !== "finalized" ? '<button type="button" class="button secondary" id="match-outcome">Record exceptional outcome</button>' : ""}${can("schedule") ? '<button type="button" class="button secondary" id="edit-fixture">Revise fixture</button>' : ""}</div></div>` : ""}`,
     null,
     { wide: true },
   );
   const dialog = document.querySelector("#dialog");
+  if (notice) dialog.querySelector("#court-message")?.scrollIntoView({ block: "nearest" });
   const onMatchClose = () => {
     if (dialog.open) return;
     dialog.removeEventListener("close", onMatchClose);
@@ -2666,14 +2700,27 @@ async function openMatch(id) {
   document
     .querySelector("#assign-court-action")
     ?.addEventListener("click", async () => {
-      let reason;
+      const form = dialog.querySelector("form"),
+        button = form.querySelector("#assign-court-action"),
+        picker = form.querySelector("#assign-court"),
+        qrButton = form.querySelector("#show-qr"),
+        message = form.querySelector("#court-message"),
+        selectedCourt = picker.value,
+        routeAtAssignment = location.hash;
+      const current = () => dialog.open && form.isConnected && dialog.querySelector("form") === form && activeMatchId === id && location.hash === routeAtAssignment;
+      hideQR();
       if (["in_progress", "paused"].includes(m.status)) {
-        const selectedCourt = document.querySelector("#assign-court").value;
+        const routeAtMove = location.hash;
         const ok = await confirm(
           "Move active game",
           "Moving a game preserves scores and timing and atomically checks court availability.",
         );
-        if (!ok) return;
+        if (location.hash !== routeAtMove) return;
+        if (!ok) {
+          await openMatch(id);
+          return;
+        }
+        let moveForm;
         modal(
           "Reason for court move",
           textarea("reason", "Required reason", "", "required"),
@@ -2682,25 +2729,38 @@ async function openMatch(id) {
               method: "POST",
               data: { court_id: selectedCourt, reason: fd.get("reason") },
             });
-            toast("Active court assignment updated.");
-            render();
+            if (!dialog.open || dialog.querySelector("form") !== moveForm || location.hash !== routeAtMove) return;
+            await openMatch(id, { notice: "Court assignment updated. The game's scores and timing are preserved.", expectedForm: moveForm });
           },
         );
+        moveForm = dialog.querySelector("form");
         return;
       }
+      button.disabled = true;
+      picker.disabled = true;
+      if (qrButton) qrButton.disabled = true;
+      message.textContent = "Assigning court…";
+      message.className = "form-help";
+      message.setAttribute("role", "status");
+      message.hidden = false;
       try {
         await api(`/matches/${id}/court`, {
           method: "POST",
-          data: {
-            court_id: document.querySelector("#assign-court").value,
-            reason,
-          },
+          data: { court_id: selectedCourt },
         });
-        toast("Court reserved.");
-        closeDialog();
-        render();
-      } catch (e) {
-        toast(e.message, true);
+        if (!current()) return;
+        await openMatch(id, { notice: "Court assigned. Choose Show QR Code below when the referee is ready to scan.", expectedForm: form });
+      } catch (error) {
+        if (!current()) return;
+        message.textContent = error.message;
+        message.className = "form-error";
+        message.setAttribute("role", "alert");
+        message.hidden = false;
+        message.scrollIntoView({ block: "nearest" });
+      } finally {
+        if (button.isConnected) button.disabled = false;
+        if (picker.isConnected) picker.disabled = false;
+        if (qrButton?.isConnected) qrButton.disabled = false;
       }
     });
   document
@@ -3167,15 +3227,15 @@ function refreshOverviewRegions(d, eventMode) {
   bindMatches();
 }
 async function loadWeather(id) {
+  const node = document.querySelector("#weather-panel");
+  if (!node) return;
   try {
     const w = await api(
       `/tournaments/${id}/weather?units=${org.settings?.units || "celsius"}`,
     );
-    const node = document.querySelector("#weather-panel");
-    if (node) node.innerHTML = renderWeather(w);
+    if (node.isConnected && node === document.querySelector("#weather-panel")) node.innerHTML = renderWeather(w);
   } catch (e) {
-    const node = document.querySelector("#weather-panel");
-    if (node)
+    if (node.isConnected && node === document.querySelector("#weather-panel"))
       node.innerHTML = `<p class="muted small">Weather unavailable. ${esc(e.message)}</p>`;
   }
 }
