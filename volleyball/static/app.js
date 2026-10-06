@@ -43,7 +43,11 @@ let organizerLayout = {},
   refreshCleanup,
   qrTimer,
   qrDeadline = 0,
-  qrGeneration = 0;
+  qrGeneration = 0,
+  organizationLogsPageNumber = 1,
+  organizationSupportPage = 1,
+  platformSupportPageNumber = 1,
+  supportCurrentStatus = "";
 const app = document.querySelector("#app");
 const nav = [
   ["overview", "Overview", "grid"],
@@ -54,6 +58,8 @@ const nav = [
   ["reports", "Reports", "chart"],
   ["staff", "Organizer staff", "shield"],
   ["settings", "Settings", "settings"],
+  ["logs", "Logs", "chart"],
+  ["support", "Support", "help"],
 ];
 const platformNav = [
   ["platform", "Dashboard", "grid"],
@@ -61,6 +67,7 @@ const platformNav = [
   ["platform-backups", "Backups", "download"],
   ["platform-performance", "Performance", "chart"],
   ["platform-health", "Service health", "shield"],
+  ["platform-support", "Support cases", "help"],
 ];
 const platformMode = () => Boolean(identity?.user?.platform_admin);
 const route = () => {
@@ -306,6 +313,8 @@ async function switchOrg(id) {
   setContext(null, id);
   dashboard = null;
   tournament = null;
+  organizationLogsPageNumber = 1;
+  organizationSupportPage = 1;
   try {
     localStorage.setItem("courtline-org", id);
   } catch {}
@@ -426,6 +435,8 @@ async function render() {
     else if (page === "staff") html = await staffPage();
     else if (page === "schedule") html = await schedulePage();
     else if (page === "reports") html = await reportsPage();
+    else if (page === "logs") html = await logsPage();
+    else if (page === "support") html = await supportPage();
     else if (page === "settings") html = await settingsPage();
     else if (page === "profile") html = await profilePage();
     else if (page === "platform") html = await platformPage();
@@ -1050,6 +1061,38 @@ const reportTypes = [
   "audit",
   "history",
 ];
+function supportCaseCards(rows, platform = false) {
+  if (!rows.length) return empty("No support cases", platform ? "Organization tickets will appear here when they are submitted." : "Open a ticket if your organization needs help.");
+  return rows.map((item) => `<article class="panel panel-pad section-gap support-case"><div class="panel-heading"><div><div class="eyebrow">${platform ? `${esc(item.organization_name)} · ` : ""}${esc(pretty(item.category))}</div><h2>${esc(item.subject)}</h2><p>${platform ? `Opened by ${esc(item.opened_by_name)} · ` : ""}${esc(dt(item.created_at))}</p></div>${badge(item.status)}</div><p class="support-case-description">${esc(item.description)}</p><div class="support-thread">${(item.messages || []).map((message) => `<div class="support-message"><div class="muted small"><strong>${esc(message.author_name)}</strong> · ${esc(message.author_type === "platform_admin" ? "Support" : "Organization staff")} · ${esc(dt(message.created_at))}</div><p>${esc(message.message)}</p></div>`).join("")}</div>${platform ? `<div class="filters">${select("status", "Case status", ["open", "in_progress", "waiting_on_organization", "resolved", "closed"], item.status, `data-case-status="${esc(item.id)}"`)}</div>` : ""}${!['resolved','closed'].includes(item.status) ? `<button type="button" class="button secondary" data-case-reply="${esc(item.id)}" data-platform-case="${platform}">${platform ? "Reply to organization" : "Reply to support"}</button>` : ""}</article>`).join("");
+}
+function supportPager(result, label = "cases", attribute = "data-support-page") {
+  const pages = Math.max(1, Math.ceil((result.total || 0) / (result.page_size || 50)));
+  if (pages < 2) return "";
+  return `<div class="table-footer"><span>Page ${result.page} of ${pages} · ${result.total} ${label}</span><div class="button-group"><button class="button secondary" ${attribute}="${result.page - 1}" ${result.page <= 1 ? "disabled" : ""}>Previous</button><button class="button secondary" ${attribute}="${result.page + 1}" ${result.page >= pages ? "disabled" : ""}>Next</button></div></div>`;
+}
+async function logsPage() {
+  const result = await api(`/audit?page=${organizationLogsPageNumber}`), logs = result.rows || [];
+  return heading("Organization logs", "A record of organization activity, changes, and support actions.") +
+    `<section class="panel">${table([
+      { label: "When", render: (row) => esc(dt(row.at)) },
+      { label: "Activity", render: (row) => `<span class="audit-action">${esc(pretty(row.action))}</span>` },
+      { label: "Actor", render: (row) => esc(pretty(row.actor_type || row.actor_id || "System")) },
+      { label: "Record", render: (row) => `${esc(pretty(row.entity_type))}${row.entity_id ? ` · ${esc(row.entity_id)}` : ""}` },
+      { label: "Reason", render: (row) => esc(row.reason || "—") },
+      { label: "Changes", render: (row) => row.changes && (row.changes.before || row.changes.after) ? `<details><summary>View</summary><pre>${esc(JSON.stringify(row.changes, null, 2))}</pre></details>` : "—" },
+    ], logs, { emptyText: "No organization activity has been recorded yet." })}</section>${supportPager(result, "events", "data-logs-page")}`;
+}
+async function supportPage() {
+  supportCurrentStatus = "";
+  const result = await api(`/support-cases?page=${organizationSupportPage}`);
+  return heading("Support", "Open a private support ticket and follow the conversation with the platform team.", '<button type="button" class="button primary" id="new-support-case">Open a ticket</button>') +
+    `<p class="muted small">Ticket messages are visible to organization staff and platform support administrators.</p>${supportCaseCards(result.rows || [])}${supportPager(result)}`;
+}
+async function platformSupportPage() {
+  const result = await api(`/platform/support-cases?page=${platformSupportPageNumber}&status=${encodeURIComponent(supportCurrentStatus)}`, { publicRequest: true });
+  return heading("Support cases", "Review organization tickets, reply, and update case status.", '<button type="button" class="button secondary" data-refresh-platform>Refresh</button>') +
+    `<p class="muted small">Platform support access to customer correspondence is recorded in the affected organization’s logs.</p><div class="filters">${select("support-status-filter", "Filter by status", [["", "All statuses"], "open", "in_progress", "waiting_on_organization", "resolved", "closed"], supportCurrentStatus, 'id="support-status-filter"')}</div>${supportCaseCards(result.rows || [], true)}${supportPager(result)}`;
+}
 async function reportsPage() {
   reportData = null;
   reportFilters = { type: "matches" };
@@ -1217,6 +1260,7 @@ function platformOrganizationsTable(organizations) {
 async function platformPage(page = "platform") {
   if (!(await refreshIdentity())) return "";
   const provision = '<button type="button" class="button primary" data-create="organization">' + icon("plus") + "Provision organization</button>";
+  if (page === "platform-support") return await platformSupportPage();
   if (page === "platform-organizations") {
     const organizations = await api("/platform/organizations", { publicRequest: true });
     return heading(
@@ -1299,6 +1343,7 @@ async function platformPage(page = "platform") {
       ["platform-backups", "Backups & recovery", "Review backup monitoring and recovery setup.", "download"],
       ["platform-performance", "Performance", "Inspect database samples and cumulative counters.", "chart"],
       ["platform-health", "Service health", "Review readiness and background processing.", "shield"],
+      ["platform-support", "Support cases", "Review organization support tickets and respond.", "help"],
     ].map(([id, title, description, ic]) => `<a class="panel record-card" href="#${id}">${icon(ic)}<h2>${title}</h2><p>${description}</p></a>`).join("")}</div>` +
     (backup.status === "not_configured" || backup.status === "unavailable" || backup.status === "stale"
       ? `<section class="panel panel-pad section-gap"><h2>Backup attention required</h2><p>${esc(backup.message || "Review backup monitoring and configuration.")}</p><a class="button secondary" href="#platform-backups">Review backups</a></section>`
@@ -1374,6 +1419,48 @@ function helpPage() {
 }
 function bindPage(page, id, tab) {
   bindInvitations();
+  document.querySelectorAll("[data-logs-page]").forEach((button) => button.onclick = async () => {
+    organizationLogsPageNumber = Number(button.dataset.logsPage);
+    await render();
+  });
+  document.querySelectorAll("[data-support-page]").forEach((button) => button.onclick = async () => {
+    if (platformMode()) platformSupportPageNumber = Number(button.dataset.supportPage);
+    else organizationSupportPage = Number(button.dataset.supportPage);
+    await render();
+  });
+  document.querySelector("#support-status-filter")?.addEventListener("change", async (event) => {
+    supportCurrentStatus = event.target.value;
+    platformSupportPageNumber = 1;
+    await render();
+  });
+  document.querySelector("#new-support-case")?.addEventListener("click", () => modal(
+    "Open a support ticket",
+    field("subject", "Subject", "text", "", 'required maxlength="180"') +
+      select("category", "Category", [["account_access", "Account access"], ["tournament_setup", "Tournament setup"], ["scoring", "Scoring"], ["other", "Other"]]) +
+      textarea("description", "How can we help?", "", 'required maxlength="12000"'),
+    async (fd) => {
+      await api("/support-cases", { method: "POST", data: formObject(fd) });
+      organizationSupportPage = 1;
+      toast("Support ticket opened.");
+      await render();
+    }, { submit: "Open ticket", wide: true },
+  ));
+  document.querySelectorAll("[data-case-reply]").forEach((button) => button.onclick = () => {
+    const platform = button.dataset.platformCase === "true";
+    modal("Reply to support case", textarea("message", "Message", "", 'required maxlength="12000"'), async (fd) => {
+      const root = platform ? "/platform/support-cases" : "/support-cases";
+      await api(`${root}/${encodeURIComponent(button.dataset.caseReply)}/messages`, { method: "POST", data: formObject(fd), publicRequest: platform });
+      toast("Support reply sent.");
+      await render();
+    }, { submit: "Send reply", wide: true });
+  });
+  document.querySelectorAll("[data-case-status]").forEach((control) => control.onchange = async () => {
+    try {
+      await api(`/platform/support-cases/${encodeURIComponent(control.dataset.caseStatus)}`, { method: "PATCH", data: { status: control.value }, publicRequest: true });
+      toast("Support case status updated.");
+      await render();
+    } catch (e) { toast(e.message, true); }
+  });
   document.querySelectorAll("[data-refresh-platform]").forEach(
     (button) => (button.onclick = render),
   );

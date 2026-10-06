@@ -47,7 +47,7 @@ def create_app(config=None):
     @app.before_request
     def identify_request():
         g.request_id=str(uuid.uuid4());g.request_started=time.perf_counter()
-    from . import auth,admin,competition,scoring,reports,weather,operations,ui,live,locations
+    from . import auth,admin,competition,scoring,reports,weather,operations,ui,live,locations,support
     auth.init_auth(app)
     @app.before_request
     def rate_limit_api():
@@ -63,7 +63,7 @@ def create_app(config=None):
             _throttle('public_limit',session['visitor_rate_id'],180,1)
         elif path in ('/api/v1/exports','/api/v1/reports/export','/api/v1/imports/preview') and request.method in ('POST','GET'):
             _throttle('report_limit',session.get('auth_session_id') or request.remote_addr or 'local',30,1)
-    for module in (auth,admin,competition,scoring,reports,weather,operations,ui,live,locations):app.register_blueprint(module.bp)
+    for module in (auth,admin,competition,scoring,reports,weather,operations,ui,live,locations,support):app.register_blueprint(module.bp)
     reports.init_reports(app)
     from .cli import init_cli
     init_cli(app)

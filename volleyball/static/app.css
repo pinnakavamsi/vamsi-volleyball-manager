@@ -2837,3 +2837,13 @@ a.brand {
 .report-source-details[open] > summary::after {
   content: "⌃";
 }
+
+.support-case-description,
+.support-message p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.support-message {
+  border-top: 1px solid var(--line);
+  padding: 16px 0;
+}

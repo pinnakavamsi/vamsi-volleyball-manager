@@ -8,6 +8,8 @@ Base path: `/api/v1`. JSON responses use direct dictionaries or `{items,total}`;
 
 Organization headers follow a selected active membership. Roles are admin, manager, scheduler, results and viewer; assignments may further restrict tournament IDs. Backend permissions apply to requests and jobs. Lists are bounded; a guessed cross-organization UUID cannot establish scope.
 
+`GET /audit` provides the selected organization's authorized activity log. `GET/POST /support-cases` lists organization tickets or opens one with `{subject,category,description}`. Organization staff can reply with `POST /support-cases/<id>/messages` and `{message}`. Platform administrators use `GET /platform/support-cases`, reply through `/platform/support-cases/<id>/messages`, and update status with `PATCH /platform/support-cases/<id>` and `{status}`. Platform access to ticket correspondence and all ticket changes are recorded in the affected organization's audit log. Support case and message policies permit either the selected tenant or the explicit platform support scope; platform support does not grant access to tournament records.
+
 ## Competitions and games
 
 Tournaments GET/POST/PATCH, tournament detail, divisions, entries, stages, fixture-generation preview/commit, setup validation and publication are supported. Publication lifecycle and public/private visibility are independent. The organizer game endpoints provide match detail, schedule update, court assignment/release, private QR reveal/revocation, approval/correction and administrative outcome. A QR appears only in the authorized reveal response and never in normal match detail or exports.

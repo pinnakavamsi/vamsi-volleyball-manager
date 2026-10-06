@@ -247,6 +247,21 @@ class Audit(Owned, Base):
     after = Column(JSONB)
     reason = Column(Text)
     __table_args__ = (UniqueConstraint('id','organization_id'),Index('ix_audit_scope_time','organization_id','created_at'),)
+class SupportCase(Owned, Base):
+    __tablename__ = 'support_cases'
+    opened_by = Column(UUID(as_uuid=False), ForeignKey('users.id'), nullable=False)
+    subject = Column(String(180), nullable=False)
+    category = Column(String(40), nullable=False)
+    description = Column(Text, nullable=False)
+    status = Column(String(30), default='open', server_default='open', nullable=False)
+    __table_args__ = (UniqueConstraint('id','organization_id'), CheckConstraint("status IN ('open','in_progress','waiting_on_organization','resolved','closed')"), Index('ix_support_case_scope_status_time','organization_id','status','created_at'))
+class SupportMessage(Owned, Base):
+    __tablename__ = 'support_messages'
+    case_id = Column(UUID(as_uuid=False), nullable=False)
+    author_id = Column(UUID(as_uuid=False), ForeignKey('users.id'), nullable=False)
+    author_type = Column(String(20), nullable=False)
+    message = Column(Text, nullable=False)
+    __table_args__ = (UniqueConstraint('id','organization_id'), ForeignKeyConstraint(['case_id','organization_id'], ['support_cases.id','support_cases.organization_id'], ondelete='RESTRICT'), CheckConstraint("author_type IN ('organization','platform_admin')"), Index('ix_support_message_case_time','case_id','created_at'))
 class Outbox(Owned, Base):
     __tablename__ = 'outbox_events'
     match_id = Column(UUID(as_uuid=False), ForeignKey('matches.id'))
@@ -296,7 +311,7 @@ class WeatherCache(Owned, Base):
     __table_args__ = (UniqueConstraint('id','organization_id'),UniqueConstraint('venue_id','provider'),)
 
 # Hash discovery only is allowed for delegated credentials; all actual match data uses RLS.
-RLS_TABLES = [c.__tablename__ for c in (Team,Venue,Court,Tournament,Division,Stage,Entry,Match,CourtAssignment,MatchEvent,ResultRevision,Audit,Outbox,Preference,Announcement,Job,WeatherCache)]
+RLS_TABLES = [c.__tablename__ for c in (Team,Venue,Court,Tournament,Division,Stage,Entry,Match,CourtAssignment,MatchEvent,ResultRevision,Audit,SupportCase,SupportMessage,Outbox,Preference,Announcement,Job,WeatherCache)]
 
 class RuleVersion(Owned, Base):
     __tablename__='rule_versions'

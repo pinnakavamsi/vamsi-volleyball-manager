@@ -32,7 +32,7 @@ def audit(action,entity_type,entity_id,before=None,after=None,reason=None,organi
     user=getattr(g,'user',None)
     scorer=getattr(g,'scorer',None)
     row=Audit(organization_id=organization_id,actor_id=user.id if user else None,
-        session_id=scorer.id if scorer else None,actor_type=('platform_admin' if user.platform_admin and not organization_id else 'organizer') if user else ('delegated_referee' if scorer else 'system'),
+        session_id=scorer.id if scorer else None,actor_type=('platform_admin' if user.platform_admin else 'organizer') if user else ('delegated_referee' if scorer else 'system'),
         action=action,entity_type=entity_type,entity_id=entity_id,before=before,after=after,reason=reason)
     get_db().add(row)
     return row

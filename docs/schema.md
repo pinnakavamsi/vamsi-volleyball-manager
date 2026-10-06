@@ -23,6 +23,8 @@ erDiagram
     COURT ||--o{ COURT_ASSIGNMENT : occupies
     MATCH ||--o{ SCORER_SESSION : delegates
     MATCH ||--o{ OUTBOX : publishes
+    ORGANIZATION ||--o{ SUPPORT_CASE : requests
+    SUPPORT_CASE ||--o{ SUPPORT_MESSAGE : discusses
 ```
 
 Global user identities own authentication sessions and hashed identity tokens. Organization memberships bind a user independently to each organization with status, role and optional tournament IDs. Organization-owned teams, venues/courts and competitions carry organization_id. Entries retain display snapshots and reusable team references. Divisions belong to tournaments; stages belong to division/tournament; matches use composite references to enforce stage/division/tournament and participant consistency. A team rename cannot rewrite its historical entry snapshot.
@@ -34,6 +36,8 @@ Stage settings identify reviewed repeat/pool/qualification structure. Season pla
 Court assignments retain reserved/occupied/released history. Partial unique indexes on unreleased court and match assignments enforce one current occupant/reservation per court and one court per game. Row locks resolve competing claims atomically. Match version/generation plus append-only journal events and result revisions separate accepted actions, scoring ownership and official approvals. `(match_id,sequence)` and `(match_id,client_action_id)` unique constraints prevent duplicate accepted event order/action receipts. Effective rules freeze in the started match snapshot. Current state can be checked against accepted journal/projection history.
 
 Result revisions preserve predecessors/sets/winner/outcome/approver/reason. Outbox events persist change delivery intent in the same match transaction. Audits retain actor type/organizer identity/delegated session/time/reason. Grants and scorer sessions store credential hashes and expiry/revocation, never plaintext admission credentials. Preferences are unique per organization/user/kind/name and stay independent of public tournament display. Jobs persist private import previews and export lifecycle/file metadata. WeatherCache is unique per venue/provider with scoped payload and fetch/expiry times.
+
+Support cases and messages retain organization ownership, opener/author, category, status and correspondence. Composite case/organization foreign keys prevent cross-tenant messages. Organization members can read and reply within their organization. Platform support uses a separately authorized RLS policy; viewing, replying, and status changes record an audit event in the affected organization's log.
 
 ## Index purposes
 

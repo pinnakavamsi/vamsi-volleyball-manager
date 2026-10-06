@@ -258,11 +258,16 @@ def _build_report(report_type, filters, public=False):
         allowed_matches = {m.id for m in matches}
         allowed_divisions = {d.id for d in divisions.values() if (not filters.get('division_id') or d.id == filters['division_id'])}
         allowed_stages = {s.id for s in stages.values() if s.division_id in allowed_divisions and (not filters.get('stage_id') or s.id == filters['stage_id'])}
-        if permitted_tournaments() or filters:
-            query = query.where(or_((Audit.entity_type=='match') & Audit.entity_id.in_(allowed_matches),
+        competition_filter = any(filters.get(key) for key in
+            ('tournament_id','division_id','stage_id','team_id','venue_id','court_id','status','result_status','outcome'))
+        if permitted_tournaments() or competition_filter:
+            scope_conditions = [(Audit.entity_type=='match') & Audit.entity_id.in_(allowed_matches),
                 (Audit.entity_type=='tournament') & Audit.entity_id.in_(tournament_by_id),
                 (Audit.entity_type=='division') & Audit.entity_id.in_(allowed_divisions),
-                (Audit.entity_type=='stage') & Audit.entity_id.in_(allowed_stages)))
+                (Audit.entity_type=='stage') & Audit.entity_id.in_(allowed_stages)]
+            if not competition_filter:
+                scope_conditions.append(Audit.entity_type=='support_case')
+            query = query.where(or_(*scope_conditions))
         begin,finish=date_bound(filters.get('from'),tz),date_bound(filters.get('to'),tz,True)
         if begin: query=query.where(Audit.created_at>=begin)
         if finish: query=query.where(Audit.created_at<finish)
