@@ -1,10 +1,10 @@
 """Reproducible isolated local physical-backup/WAL recovery drill.
 
-Changes ONLY instance/postgres development cluster; restores to a separate
-empty instance/restore-validation directory and turns source archiving off
-again after the drill. No production configuration or database is contacted.
+Requires a separate disposable instance/restore-source-* cluster and explicit
+fixture identifiers. Never uses the ordinary local application cluster or
+saved credentials. Source archiving is disabled again after the drill.
 """
-import base64,json,os,secrets,shlex,subprocess,sys,time,uuid
+import argparse,base64,getpass,json,os,re,secrets,shlex,socket,subprocess,sys,time,uuid
 from datetime import datetime,timezone
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -14,19 +14,46 @@ import psycopg
 from psycopg import sql
 from volleyball import create_app
 ROOT=Path(__file__).resolve().parents[1]
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--source-cluster',required=True,help='Separate disposable instance/restore-source-* PostgreSQL directory.')
+parser.add_argument('--email',required=True,help='Synthetic fixture email ending in .test or .invalid.')
+parser.add_argument('--organization-id',required=True)
+parser.add_argument('--match-id',required=True,help='Existing synthetic in-progress fixture match.')
+parser.add_argument('--restore-port',type=int,default=55434)
+parser.add_argument('--confirm-disposable-source',action='store_true')
+args=parser.parse_args()
+if not args.confirm_disposable_source:parser.error('Explicit --confirm-disposable-source is required; source archiving and one synthetic score will change.')
+if not args.email.rsplit('@',1)[-1].endswith(('.test','.invalid')):parser.error('Use a synthetic fixture email.')
+try:uuid.UUID(args.organization_id);uuid.UUID(args.match_id)
+except ValueError:parser.error('Organization and match IDs must be UUIDs.')
+if not 1024<=args.restore_port<=65535:parser.error('Use an unprivileged isolated restore port.')
+password=getpass.getpass('Synthetic fixture password: ')
+email,oid,mid=args.email,args.organization_id,args.match_id
 load_dotenv(ROOT/'.env')
-CLUSTER=ROOT/'instance'/'postgres';STORE=ROOT/'instance'/'recovery-material';DEST=ROOT/'instance'/os.environ.get('RESTORE_DRILL_DIRECTORY','restore-validation-3');KEY=ROOT/'instance'/'recovery-key'
+CLUSTER=Path(args.source_cluster).resolve();STORE=ROOT/'instance'/'recovery-material';DEST=ROOT/'instance'/os.environ.get('RESTORE_DRILL_DIRECTORY','restore-validation-'+secrets.token_hex(6));KEY=ROOT/'instance'/'recovery-key'
+if CLUSTER.parent!=(ROOT/'instance').resolve() or not CLUSTER.name.startswith('restore-source-'):raise SystemExit('Source must be a separate disposable instance/restore-source-* cluster; the application cluster is forbidden.')
 if DEST.parent!=ROOT/'instance' or DEST.name in {'postgres','files','recovery-material'}:raise SystemExit('Use a new direct child of instance for the isolated restore drill.')
-if not (CLUSTER/'PG_VERSION').exists():raise SystemExit('Run isolated local_database.py first.')
+if not (CLUSTER/'PG_VERSION').exists() or not (CLUSTER/'postmaster.pid').exists():raise SystemExit('Start the separately provisioned disposable source cluster first.')
 if DEST.exists() and any(DEST.iterdir()):raise SystemExit('Existing restore validation preserved; choose/review a new destination for another drill.')
 owner=make_url(os.environ['MIGRATION_DATABASE_URL'])
-if owner.host!='127.0.0.1' or owner.port!=55432 or owner.database!='volleyball':raise SystemExit('This drill is restricted to the generated local development database.')
-bin_dir=Path(os.environ.get('POSTGRES_BIN','/opt/homebrew/opt/postgresql@18/bin'))
+runtime_url=make_url(os.environ['DATABASE_URL'])
+backup_url=make_url(os.environ['BACKUP_DATABASE_URL'])
+metadata=(CLUSTER/'postmaster.pid').read_text().splitlines()
+if owner.host!='127.0.0.1' or not re.search(r'(?:^|_)(?:demo|test)(?:_|$)',owner.database or '') or Path(metadata[1]).resolve()!=CLUSTER or int(metadata[3])!=owner.port or (runtime_url.host,runtime_url.port,runtime_url.database)!=(owner.host,owner.port,owner.database):raise SystemExit('Set matching owner/runtime URLs for the named disposable demo/test source cluster.')
+if args.restore_port==owner.port:raise SystemExit('Source and restore ports must differ.')
+if (backup_url.host,backup_url.port,backup_url.database)!=(owner.host,owner.port,owner.database):raise SystemExit('Backup credentials must target the same disposable source cluster.')
+with socket.socket() as probe:
+    if probe.connect_ex(('127.0.0.1',args.restore_port))==0:raise SystemExit('Restore port is in use; no source archiving was changed.')
+from scripts.local_database import postgres_bin
+bin_dir=postgres_bin()
 os.environ['PATH']=str(bin_dir)+os.pathsep+os.environ['PATH']
 STORE.mkdir(parents=True,exist_ok=True,mode=0o700)
 if not KEY.exists():KEY.write_bytes(base64.urlsafe_b64encode(secrets.token_bytes(32)));KEY.chmod(0o600)
 files=ROOT/'instance'/'files';files.mkdir(exist_ok=True);(files/'restore-probe.txt').write_text('Volleyball Manager isolated restore file integrity probe.\n')
 started=time.perf_counter();dsn=owner.set(drivername='postgresql').render_as_string(hide_password=False)
+with psycopg.connect(dsn) as connection:
+    demo_match=connection.execute("SELECT o.demo, m.settings->>'demo' FROM matches m JOIN organizations o ON o.id=m.organization_id WHERE m.id=%s AND o.id=%s",[mid,oid]).fetchone()
+    if not demo_match or demo_match!=(True,'true'):raise SystemExit('Choose an explicitly synthetic fixture match in a demo organization; no archiving was changed.')
 command=' '.join(shlex.quote(v) for v in [str(ROOT/'.venv/bin/python'),str(ROOT/'scripts/backup_wal.py'),'%p','%f','--storage',str(STORE),'--key-file',str(KEY)])
 archiving=False;restored=False
 try:
@@ -41,10 +68,6 @@ try:
     base=subprocess.run([str(ROOT/'.venv/bin/python'),str(ROOT/'scripts/backup_base.py'),'--storage',str(STORE),'--files',str(files),'--key-file',str(KEY)],env=env,check=True,capture_output=True,text=True)
     package=STORE/json.loads(base.stdout)['file']
     # Accept a real delegated score AFTER the physical base backup completed.
-    access=(ROOT/'instance'/'demo-access.txt').read_text().splitlines()
-    email=next(line.split(': ',1)[1] for line in access if line.startswith('Organizer email: '))
-    password=next(line.split(': ',1)[1] for line in access if line.startswith('Organizer password: '))
-    demo=json.loads((ROOT/'instance'/'demo.json').read_text());oid=demo['organizations'][0]['id'];mid=demo['live_match_id']
     app=create_app();client=app.test_client();csrf=client.get('/api/v1/auth/me').json['csrf_token']
     login=client.post('/api/v1/auth/login',json={'email':email,'password':password},headers={'X-CSRF-Token':csrf});assert login.status_code==200,login.json
     csrf=client.get('/api/v1/auth/me').json['csrf_token'];headers={'X-CSRF-Token':csrf,'X-Organization-ID':oid}
@@ -68,9 +91,9 @@ try:
         time.sleep(.25)
     else:raise RuntimeError('WAL archive did not acknowledge before deadline.')
     env['RESTORE_ISOLATED']='yes';restore_started=time.perf_counter()
-    result=subprocess.run([str(ROOT/'.venv/bin/python'),str(ROOT/'scripts/restore_pitr.py'),str(package),'--storage',str(STORE),'--key-file',str(KEY),'--destination',str(DEST),'--port','55433','--start'],env=env,check=True,capture_output=True,text=True)
+    result=subprocess.run([str(ROOT/'.venv/bin/python'),str(ROOT/'scripts/restore_pitr.py'),str(package),'--storage',str(STORE),'--key-file',str(KEY),'--destination',str(DEST),'--port',str(args.restore_port),'--start'],env=env,check=True,capture_output=True,text=True)
     restored=True
-    restored_url=owner.set(drivername='postgresql',port=55433).render_as_string(hide_password=False)
+    restored_url=owner.set(drivername='postgresql',port=args.restore_port).render_as_string(hide_password=False)
     deadline=time.monotonic()+60
     while time.monotonic()<deadline:
         with psycopg.connect(restored_url,autocommit=True) as conn:
@@ -90,7 +113,7 @@ try:
         assert conn.execute('SELECT count(*) FROM result_revisions').fetchone()[0]>0
     assert (DEST/'files'/'restore-probe.txt').read_bytes()==(files/'restore-probe.txt').read_bytes()
     # Verify runtime RLS against recovered data and membership isolation.
-    runtime=make_url(os.environ['DATABASE_URL']).set(drivername='postgresql',port=55433).render_as_string(hide_password=False)
+    runtime=runtime_url.set(drivername='postgresql',port=args.restore_port).render_as_string(hide_password=False)
     with psycopg.connect(runtime) as conn:
         assert conn.execute('SELECT count(*) FROM matches').fetchone()[0]==0
         conn.execute("SELECT set_config('app.organization_id',%s,true)",[oid]);assert conn.execute('SELECT count(*) FROM matches').fetchone()[0]>0
@@ -99,7 +122,7 @@ try:
         'organizations_preserved':len(before_orgs),'memberships_preserved':len(before_memberships),'court_occupancy_preserved':True,'file_integrity_verified':True,'runtime_rls_verified':True,
         'isolated_restore_seconds':round(time.perf_counter()-restore_started,3),'total_drill_seconds':round(time.perf_counter()-started,3),
         'production_rpo_rto_measured':False,'source_archiving_after_drill':'disabled; enable independent recovery storage before production'}
-    (ROOT/'docs'/'restore-validation.json').write_text(json.dumps(report,indent=2));print(json.dumps(report))
+    (DEST/'validation-result.json').write_text(json.dumps(report,indent=2));print(json.dumps(report))
 finally:
     if restored:
         subprocess.run([str(bin_dir/'pg_ctl'),'-D',str(DEST/'data'),'-m','fast','stop'],stdout=subprocess.DEVNULL,check=False)

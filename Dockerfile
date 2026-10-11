@@ -8,6 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 COPY requirements.txt ./
+COPY LICENSE THIRD_PARTY_NOTICES.md ./
 RUN python -m pip install --no-cache-dir --only-binary=:all: -r requirements.txt \
     && groupadd --gid 10001 volleyball \
     && useradd --uid 10001 --gid volleyball --no-create-home --shell /usr/sbin/nologin volleyball \

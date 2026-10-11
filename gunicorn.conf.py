@@ -1,8 +1,10 @@
 """Local review defaults. Production binds behind an operator-configured TLS proxy."""
 from pathlib import Path
+from scripts.start_local import local_address
 
 root=Path(__file__).resolve().parent
-bind='127.0.0.1:5050'
+host,port,_public_url=local_address()
+bind=f'{host}:{port}'
 workers=2
 threads=8
 timeout=30

@@ -37,6 +37,12 @@ class User(UserMixin, Record, Base):
     locked_until = Column(DateTime(timezone=True))
     @property
     def is_active(self): return self.active
+class PlatformSetup(Base):
+    """Permanent completion marker; administrator removal never reopens setup."""
+    __tablename__ = 'platform_setup'
+    id = Column(Integer, primary_key=True)
+    completed_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    __table_args__ = (CheckConstraint('id = 1', name='ck_platform_setup_singleton'),)
 class AuthSession(Record, Base):
     __tablename__ = 'auth_sessions'
     user_id = Column(UUID(as_uuid=False), ForeignKey('users.id'), nullable=False, index=True)

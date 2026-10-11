@@ -1,7 +1,7 @@
 # Managed by Volleyball Manager
 # Native host Caddy; this block can be imported alongside existing sites.
 # DNS must resolve this hostname to the VM, with TCP 80/443 reachable.
-volleyball.example.com {
+{{DOMAIN}} {
     encode zstd gzip
     # Access logs remain disabled: identity/referee URLs can contain tokens.
     @operational path /api/v1/health/*

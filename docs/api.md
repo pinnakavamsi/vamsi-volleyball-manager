@@ -4,6 +4,8 @@ Base path: `/api/v1`. JSON responses use direct dictionaries or `{items,total}`;
 
 ## Identity and administration
 
+`GET /auth/me` includes `setup_required`. For an empty installation, `POST /auth/setup` with `{email,name,password}` creates only the first platform administrator and returns an authenticated user/session with a new CSRF token. Obtain the signed-session CSRF token from `/auth/me` and send a matching Origin. Setup is throttled, serialized in PostgreSQL, and permanently closes after the first administrator; repeated setup returns 409 `setup_complete`. Browser `/` and `/login` lead to `/setup` while required. No account defaults or organization/tournament fixture is created.
+
 `GET /auth/me`; `POST /auth/login` with email/password/optional OTP; `POST /auth/logout`; password-reset request/complete; invitation acceptance; profile GET/POST; session list/revocation; MFA setup/confirmation. Organizations/current is GET/PATCH. Teams, venues and courts support lists/creation and PATCH by ID. Organization membership list/invitation/update uses administrator permission. Platform organizations/provisioning and operations require the separate platform administrator scope. A platform binding does not imply customer membership.
 
 Organization headers follow a selected active membership. Roles are admin, manager, scheduler, results and viewer; assignments may further restrict tournament IDs. Backend permissions apply to requests and jobs. Lists are bounded; a guessed cross-organization UUID cannot establish scope.

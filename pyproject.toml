@@ -6,6 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "volleyball-manager"
 version = "1.0.0"
 description = "Organization-scoped volleyball tournament and league operations"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "volleyball/fonts/OFL.txt"]
+authors = [{name = "Vamsi Pinnaka"}]
 requires-python = ">=3.12"
 dynamic = ["dependencies"]
 
@@ -16,7 +20,7 @@ dependencies = {file = ["requirements.txt"]}
 include = ["volleyball*"]
 
 [tool.setuptools.package-data]
-volleyball = ["templates/*", "static/*"]
+volleyball = ["templates/*", "static/*", "fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

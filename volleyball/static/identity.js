@@ -9,6 +9,7 @@ import {
   errorText,
 } from "./common.js";
 let admissionToken = "";
+let setupRequired = false;
 export async function start() {
   admissionToken =
     location.hash.slice(1) ||
@@ -17,11 +18,56 @@ export async function start() {
   if (admissionToken) history.replaceState(null, "", location.pathname);
   const me = await api("/auth/me", { publicRequest: true });
   setContext(me.csrf_token, "");
+  setupRequired = Boolean(me.setup_required);
+  if (setupRequired && ["/login", "/setup"].includes(location.pathname)) {
+    if (location.pathname !== "/setup") history.replaceState(null, "", "/setup");
+    renderSetup();
+    return;
+  }
+  if (location.pathname === "/setup") {
+    location.replace(me.user ? "/" : "/login");
+    return;
+  }
   if (me.user && location.pathname === "/login") {
     location.href = "/";
     return;
   }
   render();
+}
+
+function renderSetup() {
+  document.querySelector("#app").innerHTML =
+    `<div class="auth-layout"><aside class="auth-brand"><span class="brand"><img src="/static/brand.svg" alt=""><span>Courtline<span class="product">VOLLEYBALL MANAGER</span></span></span><div><span class="eyebrow" style="color:#b6d3b1">YOUR PLATFORM STARTS HERE</span><h1>Ready for<br>your first serve.</h1><p>Create your owner account, then add organizations and competitions when you are ready.</p></div>${credit()}</aside><main id="main" class="auth-main"><div class="auth-box"><span class="eyebrow">FIRST ACCESS</span><h1>Create your owner account</h1><p>This account manages platform administration. Choose your own credentials; organizations and tournament data begin empty.</p><form id="setup-form" class="auth-form">${field("name", "Your name", "text", "", 'required maxlength="120" autocomplete="name"')}${field("email", "Email address", "email", "", 'required maxlength="254" autocomplete="username"')}${field("password", "Create password", "password", "", 'required minlength="12" maxlength="256" autocomplete="new-password" aria-describedby="setup-password-help"')}<p id="setup-password-help" class="form-help">Use a unique password or passphrase with at least 12 characters. You can enroll an authenticator in Profile and security after setup.</p>${field("confirm_password", "Confirm password", "password", "", 'required minlength="12" maxlength="256" autocomplete="new-password"')}<div class="form-error" id="setup-error" role="alert" hidden></div><button class="button primary">Create owner account ${icon("arrow")}</button></form><p class="form-help" style="margin-top:25px">First-access setup closes permanently after a platform administrator is created. Keep your credentials private.</p></div>${credit()}</main></div>`;
+  document.querySelector("#setup-form").onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.target, button = form.querySelector("button"), errorBox = document.querySelector("#setup-error");
+    const data = Object.fromEntries(new FormData(form));
+    errorBox.hidden = true;
+    if (data.password !== data.confirm_password) {
+      errorBox.textContent = "Passwords do not match. Enter the same password twice.";
+      errorBox.hidden = false;
+      form.elements.confirm_password.focus();
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "Creating owner account…";
+    try {
+      await api("/auth/setup", {method: "POST", data: {email: data.email, name: data.name, password: data.password}, publicRequest: true});
+      form.reset();
+      location.replace("/#platform");
+    } catch (error) {
+      errorBox.innerHTML = errorText(error);
+      errorBox.hidden = false;
+      if (error.code === "setup_complete") {
+        form.reset();
+        errorBox.insertAdjacentHTML("beforeend", '<p><a href="/login">Continue to sign in</a></p>');
+        button.hidden = true;
+      } else {
+        button.disabled = false;
+        button.innerHTML = `Create owner account ${icon("arrow")}`;
+      }
+    }
+  };
 }
 function render() {
   const invite =

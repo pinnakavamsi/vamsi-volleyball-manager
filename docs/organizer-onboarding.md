@@ -1,6 +1,8 @@
 # Organizer accounts and organization access
 
-The owner selected manual account delivery on October 5, 2026: the platform administrator creates an organization and its first staff administrator, shares a username and temporary password, and that administrator changes the password and creates additional staff accounts.
+A fresh installation first asks its operator to sign up as the initial platform administrator at `/setup`. This creates no organizations or staff and closes first-run signup.
+
+Organization onboarding uses manual account delivery: the platform administrator creates an organization and its first staff administrator, shares a username and temporary password, and that administrator changes the password and creates additional staff accounts.
 
 ## Platform and organization dashboards
 
@@ -8,7 +10,7 @@ Platform administrators land on a dedicated dashboard with **Organizations**, **
 
 Performance displays a current database query latency sample, connection pool use, connected database backends, database size, and cumulative transaction/deadlock counters. These values are actual request samples and PostgreSQL counters; they are not historical request rates or browser latency measurements. Transaction rollbacks can include normal read-only request cleanup.
 
-Backups shows configured status, the last recorded successful package, and continuous archive status when available. The demo VM currently has no independent backup destination. The dashboard does not run privileged database backups or claim that a local status file proves an independently recoverable backup.
+Backups shows configured status, the last recorded successful package, and continuous archive status when available. Independent backup destinations are operator-configured; an empty installation has no recovery service configured. The dashboard does not run privileged database backups or claim that a local status file proves an independently recoverable backup.
 
 ## Create an organization
 
@@ -19,7 +21,7 @@ Backups shows configured status, the last recorded successful package, and conti
 
 ## First sign-in
 
-1. Open **https://volleyball.example.com/login** and sign in with the supplied email and temporary password.
+1. Open your installation’s **`/login`** page and sign in with the supplied email and temporary password.
 2. Replace the temporary password with a different password of at least 12 characters. Workspace access is blocked until this change succeeds.
 3. Choose **Accept invitation** for the organization shown in the app. This records membership activation and opens its workspace.
 4. Use the organization selector to switch between active memberships. Platform administration alone does not grant access to private organization data.
@@ -36,7 +38,9 @@ If an organization was originally created with only a platform account as its ad
 
 Invitations expire after 72 hours. Platform administrators can choose **Renew invitation** for the original pending administrator; their existing password stays unchanged. Organization administrators can reissue other staff invitations. Keep temporary passwords private. Email delivery is not used for organization invitations; the optional email password-reset feature needs a configured adapter.
 
-## Verification
+## Historical validation
+
+The following evidence predates the public-release first-access changes. Re-run the current suite for a release.
 
 The complete isolated PostgreSQL suite passed **123 tests in 29.62 seconds** after this change. Coverage includes temporary password enforcement, first administrator/staff creation, existing password and membership preservation, CSRF, MFA, invitation expiry/renewal, acceptance races, prevention of account claims across organizations, actual performance metrics, and backup status validation. A migration downgrade/upgrade check verified that existing queued invitation payloads are converted to manual delivery while their membership references remain intact.
 

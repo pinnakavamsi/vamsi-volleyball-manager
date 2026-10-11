@@ -1,0 +1,9 @@
+{
+  "asset": "whistle.wav",
+  "origin": "Original mathematical synthesis; no third-party recordings or samples.",
+  "generator": "scripts/generate_whistle.py",
+  "license": "MIT",
+  "sample_rate": 44100,
+  "duration_seconds": 0.65,
+  "sha256": "f2bd71217def577642454dc020ea6c4ee49b1bd8a7324f07f0398642d27c42df"
+}

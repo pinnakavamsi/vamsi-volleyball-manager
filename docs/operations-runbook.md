@@ -2,7 +2,7 @@
 
 Project root: `VOLLEYBALL-MANAGER`. All commands run from this directory. The local adapter is a development implementation. Production hosting, durable storage, mail, licensed weather/geocoding and managed recovery architecture require operator selection and configuration before launch.
 
-For the isolated local application, run `.venv/bin/python scripts/start_local.py`. It prepares this project's PostgreSQL cluster, applies the checked-out migration head, preserves the existing labeled demo, and starts loopback Gunicorn plus the durable export worker. Ctrl+C stops web/worker cleanly and leaves PostgreSQL available; repeat the command to restart. Local Gunicorn uses two workers/eight threads each. Private `instance/application.log` and `instance/worker.log` hold diagnostics; request logging records duration/request and scoped identifiers without credential/request payloads. This local launcher is not a production process manager.
+For the isolated local application, run `.venv/bin/python scripts/start_local.py`. It prepares this project's PostgreSQL cluster, applies the checked-out migration head, creates no application demo records, and starts loopback Gunicorn plus the durable export worker. Ctrl+C stops web/worker cleanly and leaves PostgreSQL available; repeat the command to restart. Local Gunicorn uses two workers/eight threads each. Private `instance/application.log` and `instance/worker.log` hold diagnostics; request logging records duration/request and scoped identifiers without credential/request payloads. This local launcher is not a production process manager.
 
 ## Roles and release ownership
 
@@ -52,7 +52,7 @@ The corrected encrypted physical/WAL drill passed on October 5, 2026; see `resto
 ```sh
 RESTORE_ISOLATED=yes python scripts/restore_pitr.py BASE_PACKAGE.tar.enc \
   --storage ./operator-backups/physical --key-file ./operator-secrets/recovery.key \
-  --destination ./instance/restore-validation --port 55433 --start
+  --destination ./instance/restore-validation --port 55434 --start
 ```
 
 Use compatible PostgreSQL client/server versions. The destination must be empty. The script decrypts/authenticates the complete base, checks file hashes, rejects archive traversal/symlinks/devices, replaces primary-specific PostgreSQL settings, creates recovery.signal and restores requested encrypted WAL using `restore_wal.py`. It starts only an explicitly requested isolated server, bound to loopback with its own port. Unix sockets are disabled by default because long workspace paths exceed system socket limits. TCP authentication uses the restored source-role password with scram. An optional `--socket-dir` enables a private 0700 socket directory with an absolute path under 90 bytes; trust then applies only to that protected socket. An optional aware `--target-time` configures time recovery and pauses at the target for operator review; resume/promote only after validation. With no target, PostgreSQL replays all available contiguous WAL and completes recovery. Missing future WAL is expected when archive replay reaches the end; a gap inside required WAL is a failure requiring investigation. Read `recovery.log`, verify `pg_is_in_recovery()`/replay position and accepted application events before claiming success. Stop the isolated server after a drill.
@@ -88,7 +88,7 @@ Use separate development, isolated staging/test and production databases and sto
 
 Public viewers fetch one full overview, then poll `/api/v1/public/<slug>/live` for bounded current projections with bulk participant/court lookups. Visibility is authorized on every poll. Configuration/standings generation or match-ID changes trigger a full refresh; ordinary point updates do not reread rankings or event history. Measure this actual browser pattern through the deployed HTTP workers, including request scheduling/network delay. A one-process in-process generator measurement and fast isolated SQL plans do not establish the production concurrency/latency targets.
 
-Production requires HTTPS, secure cookie configuration, allowed-origin policy, managed secrets, mail delivery for reset/invitations, and persistent file storage. Rotate signing/application secrets through a documented maintenance window; rotation can invalidate sessions. Revoke admission/scorer grants through organization game controls, rotate database credentials with overlapping roles then remove old credentials, and rotate external provider/storage/backup credentials through the operator secret store. Never commit secrets into `.env.example` or demo records.
+Production requires HTTPS, secure cookie configuration, allowed-origin policy, managed secrets, mail delivery for password resets, and persistent file storage. Rotate signing/application secrets through a documented maintenance window; rotation can invalidate sessions. Revoke admission/scorer grants through organization game controls, rotate database credentials with overlapping roles then remove old credentials, and rotate external provider/storage/backup credentials through the operator secret store. Never commit secrets into `.env.example` or demo records.
 
 ## Organization offboarding and retention
 

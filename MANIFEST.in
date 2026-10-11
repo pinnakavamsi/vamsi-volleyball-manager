@@ -1,0 +1,17 @@
+include README.md LICENSE THIRD_PARTY_NOTICES.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md AGENTS.md
+include pyproject.toml requirements.txt requirements.in .env.example
+include alembic.ini wsgi.py gunicorn.conf.py Dockerfile .dockerignore .gitignore compose.yaml
+recursive-include volleyball *.py *.html *.js *.css *.svg *.wav *.json *.ttf *.txt *.md
+recursive-include migrations *.py *.mako
+recursive-include scripts *.py
+recursive-include deploy *.sh *.py *.yaml *.example Caddyfile
+recursive-include docs *.md *.json *.png
+recursive-include Requirements *.txt *.docx
+recursive-include tests *.py
+prune instance
+prune .release-private
+prune .venv
+prune .git
+prune build
+prune dist
+global-exclude __pycache__ *.pyc *.pyo .DS_Store *.dump *.backup *.db *.sqlite *.sqlite3 *.pem *.key

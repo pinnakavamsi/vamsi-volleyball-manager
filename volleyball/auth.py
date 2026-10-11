@@ -12,6 +12,7 @@ from datetime import timedelta
 from email.message import EmailMessage
 from functools import wraps
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import pyotp
@@ -23,7 +24,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from .common import APIError, audit, body, iso, now, uuid_str
 from .db import get_db, set_scope
-from .models import Audit, AuthSession, Membership, Organization, Token, User
+from .models import Audit, AuthSession, Membership, Organization, PlatformSetup, Token, User
 
 bp = Blueprint("auth", __name__, url_prefix="/api/v1/auth")
 login_manager = LoginManager()
@@ -88,6 +89,31 @@ def validate_password(value):
     if not isinstance(value, str) or len(value) < 12 or len(value) > 256:
         raise APIError("Use a password between 12 and 256 characters.")
     return value
+
+
+def setup_required(db):
+    """The permanent marker also survives removing the final administrator."""
+    return not (db.get(PlatformSetup, 1) or db.scalar(
+        select(User.id).where(User.platform_admin.is_(True)).limit(1)))
+
+
+def _check_setup_origin():
+    """Only the configured first-party page can perform browser setup."""
+    def origin(value):
+        try:
+            parsed = urlsplit(value)
+            if (parsed.scheme not in {'http', 'https'} or not parsed.hostname
+                    or parsed.username or parsed.password or parsed.query or parsed.fragment
+                    or parsed.path not in {'', '/'}):
+                return None
+            return (parsed.scheme, parsed.hostname.casefold(),
+                    parsed.port or (443 if parsed.scheme == 'https' else 80))
+        except (ValueError, TypeError):
+            return None
+    supplied = origin(request.headers.get('Origin', ''))
+    expected = origin(current_app.config.get('PUBLIC_BASE_URL', ''))
+    if not supplied or not expected or supplied != expected:
+        raise APIError('Open setup using the configured application address and try again.', 403, 'origin')
 
 
 def user_json(user):
@@ -317,7 +343,28 @@ def me():
     if user:
         get_db().commit()
     return {"user": user_json(user) if user else None,
-            "organizations": organizations, "invitations": invitations, "csrf_token": csrf_token()}
+            "organizations": organizations, "invitations": invitations, "csrf_token": csrf_token(),
+            "setup_required": setup_required(get_db())}
+
+
+@bp.post('/setup')
+def first_access_setup():
+    _check_setup_origin()
+    data = body()
+    _throttle('setup_ip', request.remote_addr or 'unknown', 10, 15)
+    if not setup_required(get_db()):
+        raise APIError('Initial setup is complete. Sign in with an existing administrator account.', 409, 'setup_complete')
+    if set(data) != {'email', 'name', 'password'}:
+        raise APIError('Enter your name, email address and password.')
+    email = normalize_email(data.get('email'))
+    _throttle('setup_email', email, 5, 15)
+    db = get_db()
+    user = create_first_platform_admin(db, email, data.get('password'), data.get('name'),
+                                      reason='Owner created credentials on first access')
+    _new_session(user)
+    db.commit()
+    return {'user': user_json(user), 'organizations': [], 'invitations': [],
+            'csrf_token': csrf_token(), 'setup_required': False}, 201
 
 
 @bp.post("/login")
@@ -693,16 +740,24 @@ def disable_mfa():
     return {"mfa_enabled": False}
 
 
-def bootstrap_admin(db, email, password, name="Platform administrator"):
-    """Explicit local operator bootstrap; never replace a pre-existing identity."""
+def create_first_platform_admin(db, email, password, name, *, reason):
+    """Shared web/CLI transaction; caller commits after any session creation."""
     email = normalize_email(email)
-    if db.scalar(select(User).where(User.platform_admin.is_(True))):
-        raise APIError("A platform administrator already exists; use an audited existing administrator.", 409)
+    password = validate_password(password)
+    if not isinstance(name, str) or not name.strip() or len(name.strip()) > 120:
+        raise APIError('Enter a name between 1 and 120 characters.')
+    # The shared advisory lock serializes web/CLI contenders. The table lock also
+    # fences administrator inserts from other code before the completion recheck.
+    db.execute(sql_text('SELECT pg_advisory_xact_lock(7100620261011)'))
+    db.execute(sql_text('LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE'))
+    if not setup_required(db):
+        raise APIError('Initial setup is complete. Sign in with an existing administrator account.', 409, 'setup_complete')
     user = db.scalar(select(User).where(User.email == email))
     if user:
         raise APIError("That identity already exists; do not replace its credentials.", 409)
-    user = User(email=email, name=name, active=True, platform_admin=True,
-                password_hash=generate_password_hash(validate_password(password), method="scrypt"))
+    user = User(email=email, name=name.strip(), active=True, platform_admin=True,
+                password_hash=generate_password_hash(password, method="scrypt"),
+                password_change_required=False)
     db.add(user)
     db.flush()
     g.user = user
@@ -710,6 +765,13 @@ def bootstrap_admin(db, email, password, name="Platform administrator"):
     db.execute(sql_text("SELECT set_config('app.platform_admin', 'true', true)"))
     db.add(Audit(organization_id=None, actor_id=user.id, actor_type="platform_administrator",
                  action="platform.bootstrap", entity_type="user", entity_id=user.id,
-                 reason="Explicit secure operator bootstrap"))
+                 reason=reason))
+    return user
+
+
+def bootstrap_admin(db, email, password, name="Platform administrator"):
+    """Explicit operator alternative to first-access setup, with no defaults for credentials."""
+    user = create_first_platform_admin(db, email, password, name,
+                                       reason='Explicit secure operator bootstrap')
     db.commit()
     return user

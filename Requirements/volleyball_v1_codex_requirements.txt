@@ -8,6 +8,10 @@ V1 is optimized for mobile browsers. Organizers are the only account holders. Te
 
 The exact application credit is: Designed and developed by Vamsi Pinnaka
 
+## Public-release installation policy (October 11, 2026)
+
+The public source distribution contains no personal credentials or saved application database/files. A fresh installation creates no accounts, organizations, tournaments, or games automatically. First browser access provides signup for the initial platform administrator; the operator chooses their own name, email, and password, and setup closes after that account is created. The explicit secure bootstrap CLI remains an operator alternative. Any demo or load-test fixtures below are optional, synthetic, and explicitly created in a disposable environment; they must not run during normal startup. This policy supersedes earlier proposed command-only bootstrap and automatic demo defaults. It does not add team or player self-registration.
+
 ## 1 Implementation contract
 
 - Treat MUST requirements and acceptance scenarios as release requirements. Distinguish finished features from prototypes and unavailable external integrations.
@@ -18,7 +22,7 @@ The exact application credit is: Designed and developed by Vamsi Pinnaka
 - Use supported stable dependency versions at implementation time; pin them and document the runtime requirements. Keep business rules in backend services rather than in page templates or browser-only calculations.
 - Ship a cohesive interface across all modules. Avoid unfinished placeholders, fake success messages, fabricated weather, and charts backed by invented production data.
 - Keep setup defaults editable and visible. Record overrides and consequential changes in audit history. Do not silently invent a tournament's official ranking policy.
-- Demo data must be explicitly identified and isolated from production data. Deliver at least two organizations to demonstrate isolation, one multi-division tournament, and one months-long league.
+- Demo data must be explicitly identified and isolated from production data. Provide an explicitly invoked disposable demo fixture with at least two organizations to demonstrate isolation, one multi-division tournament, and one months-long league; do not populate a fresh application automatically.
 
 ## 2 Scope and implementation defaults
 
@@ -68,7 +72,7 @@ One global organizer identity may belong to multiple organizations. Membership, 
 - Platform administration is a separate permission scope. Do not silently give every platform support user access to all private tournament data.
 - Public readers and referees must never inherit organizer permissions.
 - Provide login, logout, password reset, invitation acceptance, profile settings, and session management. Use a verified identity library or established authentication provider; do not build bespoke password cryptography.
-- Provide MFA for administrators and allow an organization to require it. Bootstrap the first platform administrator through a documented secure setup command or invitation, without hardcoded credentials.
+- Provide MFA for administrators and allow an organization to require it. Bootstrap the first platform administrator through guarded first-access signup or the explicit secure operator command, without hardcoded credentials.
 
 ## 4 Organizations and team records
 

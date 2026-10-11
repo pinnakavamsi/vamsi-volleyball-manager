@@ -334,7 +334,7 @@ export async function start() {
   identity = await api("/auth/me");
   setContext(identity.csrf_token);
   if (!identity.user) {
-    location.href = "/login";
+    location.href = identity.setup_required ? "/setup" : "/login";
     return;
   }
   if (identity.user.must_change_password) {

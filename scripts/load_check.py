@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -66,8 +67,8 @@ def local_test_urls():
     owner, runtime = (make_url(os.environ[name]) for name in ("TEST_DATABASE_URL", "TEST_RUNTIME_URL"))
     for url in (owner, runtime):
         if (not url.drivername.startswith("postgresql") or url.host not in {"127.0.0.1", "localhost"}
-                or url.port != 55432 or not url.database or "test" not in url.database.casefold()):
-            raise RuntimeError("Load validation is restricted to the generated local PostgreSQL test URLs on port 55432.")
+                or url.port != int(os.environ.get('POSTGRES_PORT','55433')) or not url.database or "test" not in url.database.casefold()):
+            raise RuntimeError("Load validation requires isolated local test URLs on the project's PostgreSQL port (default 55433).")
     if (owner.host, owner.port) != (runtime.host, runtime.port):
         raise RuntimeError("Test owner/runtime URLs must target the same isolated local cluster.")
     return owner, runtime
@@ -559,9 +560,10 @@ def main():
     args = parser.parse_args()
     if not 5 <= args.seconds <= 120 or not 2 <= args.games <= 100 or not 2 <= args.viewers <= 2000 or not 4 <= args.reader_workers <= 128 or not .5 <= args.poll_seconds <= 10:
         raise SystemExit("Use a bounded local window: seconds 5–120, games 2–100, viewers 2–2000, reader-workers 4–128, poll-seconds 0.5–10.")
-    if not 1 <= args.server_workers <= 4 or not 1 <= args.server_threads <= 16 or not 1024 <= args.port <= 65535 or args.port in (5050, 55432):
-        raise SystemExit('Use 1–4 fixture workers, 1–16 threads, and an unused loopback port excluding the development application/database.')
     owner, runtime = local_test_urls()
+    app_port=urlsplit(os.environ.get('PUBLIC_BASE_URL','http://127.0.0.1:5050')).port or 5050
+    if not 1 <= args.server_workers <= 4 or not 1 <= args.server_threads <= 16 or not 1024 <= args.port <= 65535 or args.port in (app_port, owner.port):
+        raise SystemExit('Use 1–4 fixture workers, 1–16 threads, and an unused loopback port excluding the development application/database.')
     database, app, server, http_pool = provision_database(owner), None, None, None
     try:
         app = create_app({"TESTING": True, "APP_ENV": "test", "DATABASE_URL": runtime.set(database=database).render_as_string(hide_password=False),
@@ -595,7 +597,7 @@ def main():
         report = {
             "validated_at": now().isoformat(), "status": "measured", "correctness_passed": bool(correct),
             "environment": {"os": platform.platform(), "architecture": platform.machine(), "logical_cpus": os.cpu_count(),
-                "python": platform.python_version(), "transport": ('HTTP/1.1 over loopback TCP to isolated gunicorn; PostgreSQL TCP on local127.0.0.1:55432' if args.transport == 'gunicorn' else 'Flask in-process WSGI test clients; PostgreSQL TCP on local127.0.0.1:55432'),
+                "python": platform.python_version(), "transport": (f'HTTP/1.1 over loopback TCP to isolated gunicorn; PostgreSQL TCP on local127.0.0.1:{owner.port}' if args.transport == 'gunicorn' else f'Flask in-process WSGI test clients; PostgreSQL TCP on local127.0.0.1:{owner.port}'),
                 "application_processes": args.server_workers if args.transport == 'gunicorn' else 1,
                 "application_threads_per_process": args.server_threads if args.transport == 'gunicorn' else args.games + args.reader_workers,
                 "load_generator_processes": 1, "generator_shares_application_process": args.transport == 'wsgi',

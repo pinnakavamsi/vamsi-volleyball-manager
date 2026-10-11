@@ -6,6 +6,8 @@ The product requirements and acceptance criteria are in `Requirements/volleyball
 
 ## Confirmed account and administration decisions
 
+- Public-release preparation on October 11, 2026 requires empty normal startup and first-access signup for the first platform administrator. Do not seed application accounts/data during startup or package private configuration, databases, logs, or backups. Optional synthetic fixtures must be explicitly invoked in a disposable environment. This newer decision supersedes earlier command-only bootstrap defaults.
+
 - The owner selected manual account delivery on October 5, 2026. Create organizations and their first organizer administrator accounts, display temporary credentials for private sharing, require a different password at first sign-in, and allow organization administrators to add staff. Organization invitations do not depend on email.
 - Platform administrators use a dedicated dashboard for organization provisioning, backup status, performance, and service health. Their navigation and default landing page must show platform operations. Organization staff use the tournament and game workspace.
 - Preserve existing organizer passwords and independent memberships. Platform administration does not implicitly grant access to customer tournament data. Show operational status from actual measurements and configuration.

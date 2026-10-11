@@ -225,5 +225,5 @@ fi
 
 printf 'Docker Engine, Compose, and native Caddy are installed. Existing sites and SSH settings were preserved.\n'
 printf 'Deployment account: %s (forced release command; no Docker group).\n' "$DEPLOY_USER"
-printf 'Next: run deploy/configure.sh as root to create private VM configuration and install this site.\n'
+printf 'Next: run deploy/configure.sh --domain YOUR_HOSTNAME as root to generate infrastructure secrets and install your site.\n'
 printf 'Firewall rules were preserved. Keep the current SSH port reachable; the domain needs TCP 80/443.\n'

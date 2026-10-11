@@ -134,4 +134,4 @@ mv -f -- "$candidate_env" "$VM_ROOT/config/release.env"
 ln -s "$release" "$VM_ROOT/.current-$$"
 mv -Tf "$VM_ROOT/.current-$$" "$VM_ROOT/current"
 completed=true
-echo "Application release $revision passed container and loopback readiness. Verify https://volleyball.example.com separately."
+echo "Application release $revision passed container and loopback readiness. Verify your configured HTTPS site separately."

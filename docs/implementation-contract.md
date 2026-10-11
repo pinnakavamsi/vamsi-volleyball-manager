@@ -1,6 +1,6 @@
 # Implementation contract
 
-Project root: VOLLEYBALL-MANAGER only. Stack: Python 3.14, Flask, SQLAlchemy 2, Alembic, PostgreSQL 18, modular vanilla JavaScript/CSS. Application package `volleyball`. Factory `volleyball.create_app`. All API paths `/api/v1`. PostgreSQL only; no SQLite. Demo identified everywhere, isolated to a local database.
+Project root: VOLLEYBALL-MANAGER only. Stack: Python 3.14, Flask, SQLAlchemy 2, Alembic, PostgreSQL 18, modular vanilla JavaScript/CSS. Application package `volleyball`. Factory `volleyball.create_app`. All API paths `/api/v1`. PostgreSQL only; no SQLite. Normal startup is empty. Optional demonstrations use explicitly invoked synthetic fixtures in a disposable database.
 
 ## Shared Python interfaces
 
@@ -18,6 +18,8 @@ Error: `{error:{code,message,details}, request_id}`. Common success dictionaries
 
 ## Frontend contract
 
+First access: GET `/auth/me` includes `setup_required`. While setup is required, `/` and `/login` lead to `/setup`. POST `/auth/setup` accepts `{email,name,password}`, creates only the first platform administrator under a database lock, returns an authenticated session and new CSRF token, and permanently closes setup. Matching origin, existing signed-session CSRF, and database-backed throttles apply; no account defaults or setup token are shipped. The explicit operator `bootstrap-admin` command shares the bootstrap protections.
+
 GET `/auth/me` -> `{user:{id,email,name,platform_admin,mfa_enabled}|null,organizations:[{id,name,slug,role,demo}],csrf_token}`. POST `/auth/login` {email,password,otp?}, `/auth/logout`; POST `/auth/reset/request` {email}, `/auth/reset/complete` {token,password}; `/auth/invitations/accept` {token,name,password}; GET/POST `/auth/profile`; GET `/auth/sessions`; DELETE `/auth/sessions/<id>`; POST `/auth/mfa/setup` and `/auth/mfa/confirm`.
 
 Org header required below. GET `/dashboard` -> `{organization,tournaments,teams,venues,courts,matches,metrics,announcements,notifications}` with scoped filtered persisted data. GET/POST `/teams`, `/venues`, `/courts`, `/tournaments`; PATCH /resource/<id>. GET/POST `/memberships`, PATCH `/memberships/<id>`. GET/PATCH `/organizations/current`; GET/POST `/platform/organizations` restricted platform admin.
@@ -32,11 +34,6 @@ GET `/public/<slug>` -> public-safe tournament detail; GET `/public/<slug>/live`
 
 GET `/reports?type=...&tournament_id=...&division_id=...&team_id=...&status=...&from=...&to=...` -> `{columns,rows,total,metadata}`. GET `/reports/export?format=csv|xlsx|pdf&...` -> authorized filtered download. POST `/exports` creates persisted job {type,format,filters}, GET `/exports`/`/exports/<id>`, GET `/exports/<id>/download`. POST `/imports/preview` multipart CSV + type; POST `/imports/<id>/commit`. GET `/imports/template?type=teams|entries|fixtures|referees`. GET `/audit`. GET/POST `/preferences` {kind:'organizer'|'report',layout}; GET/PATCH `/tournaments/<id>/display` separate public configuration; GET `/organizations/export` business-data JSON. POST `/tournaments/<id>/announcements`. GET `/health/live`, `/health/ready`; GET `/operations` platform admin.
 
-## Division of work
+## Change boundaries
 
-Root owns models, app factory/db/common, competition services/routes, scorer engine, court transactions, migrations, local env, scoring/race tests.
-Identity/admin agent owns auth.py, admin.py, seed.py and identity tests (do not edit root-owned files).
-Frontend agent owns templates/* static/* and interface routes/ui.py (do not edit backend).
-Reports/operations agent owns reports.py, weather.py, operations.py, docs (except this contract), scripts backup/runbook helpers and reporting tests.
-
-All work must be functional, durable, safe by scope, and accurately document remaining production/device validation. Do not claim external integrations configured or production readiness.
+Keep backend rules and authorization checks separate from browser rendering. Preserve durable accepted events, shared identities, and scoped memberships through migrations. Use isolated PostgreSQL tests for permissions and concurrency. External integrations and production/device validation must be documented accurately.

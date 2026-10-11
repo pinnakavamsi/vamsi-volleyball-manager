@@ -24,9 +24,11 @@ def init_cli(app):
     @app.cli.command('seed-demo')
     @click.option('--email',required=True)
     @click.option('--password',prompt=True,hide_input=True,confirmation_prompt=True)
-    def seed_demo(email,password):
+    @click.option('--confirm-isolated-database',is_flag=True,help='Confirm this separately configured demo/test database may receive synthetic fixtures.')
+    def seed_demo(email,password,confirm_isolated_database):
         """Seed clearly identified development data in this isolated database."""
         if app.config['APP_ENV'] not in ('development','test'):raise click.ClickException('Demo seed requires a development or test installation.')
+        if not confirm_isolated_database:raise click.ClickException('Pass --confirm-isolated-database only for a separate disposable demo/test database.')
         app.config['ALLOW_DEMO_SEED']=True
         from .seed import seed_demo as seed
         result=seed(get_db(),email,password);get_db().commit();click.echo(json.dumps(result,indent=2))

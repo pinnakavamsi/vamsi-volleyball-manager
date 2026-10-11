@@ -27,7 +27,9 @@ Remaining launch validation is concrete: real iPhone Safari/Android Chrome and a
 | A51 | Recorded 25-game/500-distinct-viewer HTTP compact-poll workload passed local p95 ACK/live thresholds and correctness; backpressure/skipped ticks are recorded | This does not prove sustained 500 reads/second or production capacity; target-host deployment and p75 field LCP/INP remain unmeasured |
 | A52 | Exact application credit in identity/organizer/referee/public/display/help and generated PDF | Check readable unobstructed credit on each required experience after branding changes |
 
-## Automated evidence
+## Historical automated evidence
+
+These records describe the synthetic local workloads and revisions tested at the time. They do not validate later public-release changes; run the current checks and record fresh-install signup/no-seed results for each release.
 
 The complete PostgreSQL suite passed **100 tests in 20.31 seconds**, including compact-live privacy/dynamic-participant/history-court/query-category bounds and public-metadata freshness. Score projection updates preserve the metadata digest; stage/visible announcement changes invalidate it while future invisible announcements do not. This also includes real row-lock races, stale/revoked takeover, shared-team/referee start conflicts, reviewed ranking/season-playoff/cross-pool tie handling, journal/projection recovery and revision predecessors, strict malformed rule-input rejection, narrow expired-throttle cleanup and sponsor display configuration with unsafe URL rejection. The suite includes 19 pure reporting/weather/encryption cases checking actual spreadsheet escaping/format output and complete large-source metadata, PDF column-group identity and bundled font/infinity coverage, numeric sort/selection bounds, weather schema/timezone validation, authenticated encryption/tamper rejection, private key file permissions, idempotent encrypted WAL archive/restore commands and sufficient source recovery settings. Completed local browser, HTTP workload, PDF and isolated restore evidence is attached below. Test code is in `tests/`; tests never use SQLite as a substitute.
 
@@ -64,6 +66,8 @@ The [local browser review](browser-review.md) records Chrome 154/macOS observati
 
 ## Real-device/browser review
 
+The October 11 open-source preparation passed 146 local tests and verified blank desktop/mobile first-access signup, no automatic accounts or competition records, package exclusions, and deployment disconnection. See [the current preparation record](open-source-release.md). Historical workload, device, and restore evidence below does not substitute for those current checks or for target-host acceptance.
+
 - [ ] Record device, OS/browser version, portrait/landscape, network conditions and date for iPhone Safari, Android Chrome, desktop and TV/projector target.
 - [ ] At 320 CSS pixels and 200% text scaling, verify no essential controls disappear/overlap; inspect safe-area insets, score touch spacing and orientation changes.
 - [ ] QR hidden on open, reveal count starts at 10, repeated reveal resets, deadline hides at zero; app switch/navigation hides immediately and returning does not revive stale QR.
@@ -88,4 +92,13 @@ The [local browser review](browser-review.md) records Chrome 154/macOS observati
 - [ ] Run target-host load baseline, document bottlenecks/error rates/data volumes and any unachieved latency/mobile targets. No contract capacity/uptime claim without measured evidence.
 - [ ] Confirm event formats/ranking/forfeit/cross-pool formulas, approval policy, QR admission lifetime, backup retention/recovery targets and support/retention/deletion policy with the owner.
 
-Scheduled report distribution, custom builders, player/team accounts, payments, native clients, additional formats, enterprise SSO and multiregion failover remain deferred as specified. The owner separately authorized the demo VM deployment at `https://volleyball.example.com`; its [server setup record](server-setup.md) documents actual infrastructure and outstanding configuration. Production acceptance gates remain open.
+Scheduled report distribution, custom builders, player/team accounts, payments, native clients, additional formats, enterprise SSO and multiregion failover remain deferred as specified. The [self-host verification checklist](server-setup.md) provides reusable installation checks. No existing host or deployment connection is included in the public distribution. Production acceptance gates remain open.
+
+## Public distribution checks
+
+- [ ] Verify a new empty PostgreSQL installation opens first-administrator signup and creates no organization, tournament, staff, or game before explicit actions.
+- [ ] Confirm setup closes after the first platform administrator and refuses concurrent or repeated creation.
+- [ ] Confirm local and packaged startup do not automatically run seed/demo utilities.
+- [ ] Review current source and all published history for personal credentials, private URLs, keys, database/files, logs, and backup artifacts.
+- [ ] Build source/wheel artifacts and verify templates, static resources, PDF fonts, provenance, and licenses are included; private configuration and saved records must be absent.
+- [ ] Verify release automation and development keys have no inherited connection to a previous operator host.

@@ -9,6 +9,7 @@ def organizer():
 
 
 @bp.get("/login")
+@bp.get("/setup")
 @bp.get("/reset")
 @bp.get("/invitation")
 @bp.get("/invite")

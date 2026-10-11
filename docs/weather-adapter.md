@@ -8,7 +8,7 @@ Keep an explicit IANA timezone on each venue. New tournament venues inherit the 
 
 ## Provider configuration
 
-The standalone application's external services are **disabled by default**. The VM Compose configuration enables bounded searches through Photon's public API under its reasonable-use policy; weather stays disabled. Saved addresses and tournament administration work independently. The owner must confirm whether the deployment is noncommercial or commercial before enabling a weather plan with that restriction. These nonsecret variables can be supplied through the application container's environment; do not put commercial credentials in source control.
+External services are **disabled by default**, including in the generic Compose configuration. Enable address lookup or weather only after selecting a provider and reviewing its usage terms. Saved addresses and tournament administration work independently. The owner must confirm whether the deployment is noncommercial or commercial before enabling a weather plan with that restriction. These nonsecret variables can be supplied through the application container's environment; do not put commercial credentials in source control.
 
 For a confirmed noncommercial community/demo deployment:
 
@@ -22,7 +22,7 @@ WEATHER_PROVIDER_NAME=Open-Meteo
 WEATHER_LICENSE_CONFIRMED=true
 ```
 
-The [Photon project](https://github.com/komoot/photon#demo-server) allows reasonable use of its demonstration server and may throttle or ban extensive usage. It provides no availability guarantee. The VM Compose configuration enables this public address service with the application's bounded requests and cache. Use a licensed hosted or separately operated Photon service as volume grows; update those Compose environment values to the trusted HTTPS API endpoint. Attribution identifies Photon and OpenStreetMap contributors. This app deliberately does not use the public Nominatim service for autocomplete.
+The [Photon project](https://github.com/komoot/photon#demo-server) allows reasonable use of its demonstration server and may throttle or ban extensive usage. It provides no availability guarantee. When explicitly enabled, the application bounds requests and uses a cache. Use a licensed hosted or separately operated Photon service as volume grows; update those Compose environment values to the trusted HTTPS API endpoint. Attribution identifies Photon and OpenStreetMap contributors. This app deliberately does not use the public Nominatim service for autocomplete.
 
 The [Open-Meteo terms](https://open-meteo.com/en/terms) restrict the free hosted API to noncommercial uses, with limits below 10,000 calls/day, 5,000/hour and 600/minute. Subscriptions, advertising and commercial products require an appropriate paid service. Its [data licence](https://open-meteo.com/en/licence) requires attribution. For licensed commercial access, use:
 

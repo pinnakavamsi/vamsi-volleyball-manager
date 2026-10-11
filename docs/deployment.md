@@ -1,157 +1,78 @@
-# Demo VM deployment
+# Manual self-host deployment
 
 Designed and developed by Vamsi Pinnaka
 
-This deployment serves **https://volleyball.example.com** from one Linux VM. Caddy runs as a host service. Docker Compose runs exactly two persistent services: `app` and `postgres`. The app container supervises Gunicorn and the durable export worker; migrations and administrator provisioning use short-lived containers.
+The deployment files are an optional single-host template: host Caddy serves HTTPS, and Docker Compose runs an application container (Gunicorn plus export worker) and private PostgreSQL. Application files and the database persist outside release source/images. The repository's CI checks source/container builds; it does not upload code to a VM or carry a preconfigured deployment connection.
 
-```mermaid
-flowchart LR
-  Browser -->|HTTPS 443| Caddy[Host Caddy]
-  Caddy -->|127.0.0.1:5050| App[App container: web + worker]
-  App -->|Private Docker network| PG[PostgreSQL container]
-  GitHub[GitHub push to main] -->|Verified SSH: source archive| Release[VM release script]
-  Release -->|Build, controlled migration, restart| App
-  PG --> DBVolume[Persistent database volume]
-  App --> Files[Persistent private files]
-```
+This guide does not describe an existing server. Use infrastructure you control, and keep host addresses, private configuration, keys, and operational records outside the public repository.
 
-The private GitHub repository stays private. GitHub Actions checks out its own commit using its read-only token and uploads a source archive over SSH. The VM needs no GitHub personal access token, private Git clone credentials, registry login, or self-hosted Actions runner.
+## Host preparation
 
-## 1. Server prerequisites
+Review `deploy/install-host.sh` before running it on a supported systemd Ubuntu/Debian host. It installs Docker Engine, Compose, and Caddy. Allow public HTTP/HTTPS only where required, keep PostgreSQL private, and control administrator access separately. Review available memory, disk, and capacity against your actual workload.
 
-Use a supported Ubuntu or Debian VM with root/sudo access. The supplied host installer supports Ubuntu 22.04/24.04/26.04 and Debian 12/13; it installs Docker Engine, the Compose plugin, and Caddy from their official package repositories. Review available memory/disk against the actual workload before admitting live events; the local load result is not a measurement of this VM.
-
-Create an `A` DNS record for `volleyball.example.com` pointing to the VM's public IPv4 address. Publish an `AAAA` record only if IPv6 reaches this same VM. Permit inbound TCP 80 and 443 in the VM/provider firewall. Permit the SSH port used by deployment. Do not open 5050 or 5432 publicly. Caddy's [automatic HTTPS requirements](https://caddyserver.com/docs/automatic-https) include correct public DNS and reachable challenge ports.
-
-Keep an existing administration session open while changing infrastructure. The installer preserves existing Caddy sites and refuses concrete port/package conflicts that need operator review. It does not replace firewall policy or SSH access settings.
-
-## 2. Initial host setup
-
-Get a reviewed copy of this project's committed deployment files onto the VM through your existing administrator connection. Run commands from that copy's project root. Never copy local `.env`, `instance/postgres`, passwords, backups, or local demo accounts to the VM.
-
-On your Mac, generate a dedicated Actions deployment key outside the Git repository:
+From a reviewed source checkout already present on your own host:
 
 ```sh
-ssh-keygen -t ed25519 -N '' -f ~/.ssh/volleyball-demo-actions -C volleyball-demo-actions
+sudo bash deploy/install-host.sh
+sudo bash deploy/configure.sh --domain YOUR_HOSTNAME
 ```
 
-Copy only `~/.ssh/volleyball-demo-actions.pub` to the VM using the existing administration account. Keep the private key on your Mac until it is saved as a GitHub Actions secret. On the VM:
+Replace `YOUR_HOSTNAME` with an HTTPS DNS hostname you control. Arrange DNS and reachable certificate challenge ports. The configurator renders the generic Caddy template, generates independent random signing/MFA/database credentials, and stores private root-owned mode 0600 configuration under `/opt/volleyball-manager/config`. It preserves complete existing configurations and refuses a changed hostname or partial configuration requiring review.
+
+`runtime.env` contains only the application runtime configuration and nonowner database connection. `operator.env` contains migration/backup connections for short-lived commands. `postgres.env` holds database initialization configuration, and `release.env` selects the successfully released image. Do not copy development `.env`, databases, file storage, or accounts to the host. The persistent private application directory is `/opt/volleyball-manager/data/instance`; PostgreSQL has a separate Docker volume.
+
+The installer also includes a constrained release receiver. No deployment key is required for the manual procedure below. Privileged host administration and source approval remain operator responsibilities.
+
+## Apply a reviewed release
+
+Use a committed, reviewed source revision. On the host, create an archive from that revision and pass it to the installed local receiver:
 
 ```sh
-sudo bash deploy/install-host.sh --deploy-key /path/to/volleyball-demo-actions.pub
-sudo bash deploy/configure.sh
+release_revision=$(git rev-parse HEAD)
+release_archive=$(mktemp /tmp/volleyball-release-XXXXXX.tar.gz)
+git archive --format=tar.gz --output "$release_archive" "$release_revision"
+release_digest=$(sha256sum "$release_archive" | cut -d ' ' -f 1)
+sudo /opt/volleyball-manager/deploy/receive-release.sh   "$release_revision" "$release_digest" < "$release_archive"
+rm -- "$release_archive"
 ```
 
-`configure.sh` creates unique random database/application/MFA credentials without printing them. Rerunning it preserves a complete existing configuration and refuses a partial bundle. Its files are root-owned mode 0600 under root-only `/opt/volleyball-manager/config`:
+The receiver validates the checksum and bounded archive, rejects unsafe/private paths, stores an immutable source release, and invokes the release script under deployment locks. The script builds the selected image, starts private PostgreSQL, stops web/worker for maintenance, runs Alembic once with operator credentials, restarts the app, and checks container and HTTP readiness before recording success. This single-host procedure has a brief maintenance window. Pending browser actions still need normal server acknowledgment after connectivity returns.
 
-| File | Purpose |
-| --- | --- |
-| `runtime.env` | Production-mode application configuration and nonowner `volleyball_app` database credentials |
-| `operator.env` | Migration owner and operator backup credentials, only for one-shot commands |
-| `postgres.env` | PostgreSQL initialization/bootstrap and separate role passwords |
-| `release.env` | The exact application image selected by a successful release |
+Before releasing against existing data, verify a current independently stored recovery package and review migrations for compatibility with the retained application image. A failed migration/readiness check attempts to restore the previous application image while preserving database/files/secrets. It never automatically rewinds acknowledged games or downgrades schema. An incompatible migration may require reviewed forward repair or isolated recovery.
 
-The host creates `/opt/volleyball-manager/data/instance` owned by container UID/GID 10001, with mode 0700. PostgreSQL uses the named volume `volleyball-manager-postgres-data`. Neither is inside the source release directories. PostgreSQL 18's [official image storage layout](https://hub.docker.com/_/postgres) mounts its data volume at `/var/lib/postgresql`.
+## First access
 
-The dedicated `volleyball-deploy` account is not in the Docker group and cannot read private configuration. Its public key permits only the installed archive receiver through a forced command and a specific sudo rule. The receiver accepts exactly a commit SHA and archive SHA-256, rejects unsafe paths/links/special files, checks source upload limits, and extracts root-owned releases. Because it builds and executes code approved for deployment, this key and write access to `main` are privileged application publishing capabilities.
+A fresh database has no preloaded accounts or competition data. Visit your own HTTPS application and complete first-platform-administrator signup. Choose your own email, name, and password; first-run setup closes after creation. Complete this step while access is controlled, then enroll MFA in Profile and security. Create organizations and separate organizer administrators through platform administration.
 
-## 3. Configure GitHub Actions
-
-In [this repository's Actions secrets](https://github.com/OWNER/REPOSITORY/settings/secrets/actions), add:
-
-| Secret | Value |
-| --- | --- |
-| `DEPLOY_HOST` | The VM's public IPv4 address or SSH hostname |
-| `DEPLOY_USER` | `volleyball-deploy` |
-| `DEPLOY_PORT` | Optional SSH port; empty uses 22 |
-| `DEPLOY_SSH_KEY` | Complete private key from `~/.ssh/volleyball-demo-actions`, including header/footer |
-| `DEPLOY_KNOWN_HOSTS` | Verified known-hosts entry for the exact SSH address and port |
-
-Obtain the server's public host key through the already trusted administration session or provider console:
+The explicit `bootstrap-admin` operator CLI remains an alternative. If used inside a short-lived container, include the operator overlay only for that command, never for normal service startup:
 
 ```sh
-sudo cat /etc/ssh/ssh_host_ed25519_key.pub
-sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+sudo docker compose --project-name volleyball-manager   --env-file /opt/volleyball-manager/config/release.env   -f /opt/volleyball-manager/current/compose.yaml   -f /opt/volleyball-manager/current/deploy/compose.operator.yaml   run --rm --no-deps app flask --app volleyball bootstrap-admin --email YOUR_ADMIN_EMAIL
 ```
 
-For port 22, the `DEPLOY_KNOWN_HOSTS` secret has this format, substituting the actual address and public key:
+Enter the password at its hidden prompt. No default account or password is published. Organization invitations use manual delivery; optional password-reset email, address lookup, and weather require separately configured services and suitable provider terms. External providers are disabled by default.
 
-```text
-VM_PUBLIC_IP ssh-ed25519 ACTUAL_SERVER_PUBLIC_HOST_KEY
-```
+## Operations and rollback
 
-For another port, use `[VM_PUBLIC_IP]:PORT` as the first field. Match the exact `DEPLOY_HOST` value. The public host key is not the deployment user's public key. Verify the fingerprint out of band; the workflow deliberately requires [strict SSH host verification](https://man.openbsd.org/ssh_config#StrictHostKeyChecking) and never trusts an unchecked `ssh-keyscan` result. A host rebuild/key change must be reviewed before updating this secret.
-
-The workflow labels its deployment environment `demo`. If your GitHub plan supports environments for private repositories, you may put these same secrets in **Settings → Environments → demo** and allow only `main` there. GitHub Free private repositories can use repository Actions secrets; private environment configuration requires Pro/Team/Enterprise. See [environment availability](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) and [repository secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
-
-After the host and secrets are ready, set repository Actions variable **`DEPLOY_ENABLED` = `true`** under **Settings → Secrets and variables → Actions → Variables**. Leave it unset/false while preparing the VM. This gate allows deployment files to be committed without attempting an unconfigured server connection. Restrict repository write access; protect/review changes to `main` and deployment files where your plan supports it.
-
-## 4. First release and administrator
-
-Commit and push the deployment files to `main`, or use **Actions → Deploy Volleyball Manager demo → Run workflow**, selecting `main`. Every enabled push to `main` subsequently deploys that exact commit. Other branches and pull requests do not deploy.
-
-The job serializes releases without canceling a running deployment. It checks out a [pinned official checkout release](https://github.com/actions/checkout/releases/tag/v7.0.1), grants only `contents: read`, and transfers `git archive` output through verified SSH. It builds `volleyball-manager:<full-commit-SHA>` on the VM, starts the private database, stops the old web/worker together, runs Alembic once with migration credentials, starts the new application, and waits for both container health and HTTP readiness before recording success. This single-host deployment has a brief maintenance window; browser actions remain Pending during interrupted connectivity.
-
-The initial database is empty, with no development seed or inherited local logins. Provision the first platform administrator from an interactive VM administrator terminal, substituting your own email:
+Inspect container health and private application logs on your host:
 
 ```sh
-sudo docker compose --project-name volleyball-manager \
-  --env-file /opt/volleyball-manager/config/release.env \
-  -f /opt/volleyball-manager/current/compose.yaml \
-  -f /opt/volleyball-manager/current/deploy/compose.operator.yaml \
-  run --rm --no-deps app flask --app volleyball bootstrap-admin --email YOUR_ADMIN_EMAIL
-```
-
-Enter the password at the hidden prompt, sign in over HTTPS, and enroll MFA. Provision organizations and their initial organizers through platform administration. Never include the operator overlay in a long-running `up` command. The normal app command refuses privileged database credentials.
-
-After first release, verify the external HTTPS page and certificate from outside the VM. Container/loopback readiness does not prove public DNS, provider firewall rules, or certificate issuance; the workflow reports these as a separate host check.
-
-Invitations and password resets remain in deferred delivery until you configure an actual SMTP provider in the VM's `runtime.env`; weather remains disabled until a licensed provider is selected. After a reviewed environment change, recreate only the app service from the operator terminal:
-
-```sh
-sudo docker compose --project-name volleyball-manager \
-  --env-file /opt/volleyball-manager/config/release.env \
-  -f /opt/volleyball-manager/current/compose.yaml \
-  up -d --no-deps --force-recreate app
-```
-
-## 5. Operations, failed releases, and rollback
-
-Useful operator commands:
-
-```sh
-sudo docker compose --project-name volleyball-manager \
-  --env-file /opt/volleyball-manager/config/release.env \
-  -f /opt/volleyball-manager/current/compose.yaml ps
-
-sudo docker compose --project-name volleyball-manager \
-  --env-file /opt/volleyball-manager/config/release.env \
-  -f /opt/volleyball-manager/current/compose.yaml logs --tail 100 app
-
+sudo docker compose --project-name volleyball-manager   --env-file /opt/volleyball-manager/config/release.env   -f /opt/volleyball-manager/current/compose.yaml ps
 sudo systemctl status caddy --no-pager
-sudo journalctl -u caddy --since '-15 minutes' --no-pager
 ```
 
-Operational liveness/readiness paths are private to the host/container. The receiver, release script, and rollback share deployment locks. Source archives and Docker images are retained per commit; the successful `current` pointer changes only after readiness. The previous successful SHA is recorded in `/opt/volleyball-manager/config/previous-release`. Do not prune the current/previous images or release directories needed for rollback.
-
-An image build failure leaves the old app running. A failed migration or new-app readiness check attempts to restart the previous image and fails the GitHub job. It preserves the PostgreSQL volume, private files, and secrets. It never automatically downgrades migrations or rewinds acknowledged scoring data. A partially applied incompatible migration can prevent the old image from becoming ready; inspect the private migration/app logs and use reviewed forward repair or the isolated database recovery procedure.
-
-Before enabling automatic releases against real data, require a current independently stored recovery package and review each schema change for compatibility with the previous image. An empty first demo database needs no historical-data backup. The release script does not silently create or verify an off-VM recovery destination; keep automatic deployment disabled until your recovery policy is satisfied for the data actually hosted.
-
-For a compatible application rollback, run either:
+For a compatible retained application image:
 
 ```sh
 sudo bash /opt/volleyball-manager/current/deploy/rollback.sh
-# Or choose a retained immutable release explicitly:
-sudo bash /opt/volleyball-manager/current/deploy/rollback.sh FULL_40_CHARACTER_COMMIT_SHA
 ```
 
-Rollback changes application code only. Confirm the retained image supports the current schema before using it. For incompatible database changes, use the [migration and recovery runbook](operations-runbook.md); recovery is an explicit operator operation, not an automated `alembic downgrade` or shared-platform data rewind. Root-owned receiver/SSH wrapper/host-init changes require a reviewed host-install update and are not replaced by uploaded application source.
+Rollback changes application code only. Confirm schema compatibility first. Preserve the previous/current release images, PostgreSQL volume, and private files until the release is verified. Root-owned installer/receiver/SSH wrapper changes require an explicit reviewed host update. Database major upgrades and password rotation are separate operator work; changing initialization environment values does not change passwords in an existing volume.
 
-Docker and Caddy start on VM boot; the two containers use `restart: unless-stopped`. A manually stopped service stays stopped until explicitly started. Existing PostgreSQL service/image/init mounts are preserved during app releases. PostgreSQL major version upgrades and password rotation are separate reviewed operator changes; changing initialization variables does not change passwords in an existing volume.
+For private runtime configuration changes, recreate the app service after review:
 
-## 6. Backups and release gates
+```sh
+sudo docker compose --project-name volleyball-manager   --env-file /opt/volleyball-manager/config/release.env   -f /opt/volleyball-manager/current/compose.yaml   up -d --no-deps --force-recreate app
+```
 
-Persistent volumes protect normal container restarts; they are not backups. Before admitting real organizations or live matches, configure independent encrypted recovery storage, scheduled physical backups plus continuous WAL/PITR, private-file/config recovery, retention, backup failure alerts, and an isolated restore drill. The project already includes these operator scripts and the [recovery runbook](operations-runbook.md); this deployment does not invent an external storage destination or claim unmeasured RPO/RTO. Keep the encryption recovery key separate from VM-only copies.
-
-This repository work adds deployment packaging and operations instructions. It does not establish target-VM capacity, provider delivery, physical device/accessibility acceptance, or disaster recovery measurements. Record host-specific evidence and remaining gates in the [release checklist](release-checklist.md) before treating the demo host as production infrastructure.
+Use the [operations runbook](operations-runbook.md), [self-host verification checklist](server-setup.md), and [release checklist](release-checklist.md). Local/container readiness does not prove public DNS, HTTPS, production performance, independently durable storage, or disaster recovery. Configure encrypted recovery storage, continuous WAL/PITR, file/config recovery, retention, alerts, and an isolated restore drill before admitting live events. Keep recovery keys separately protected.

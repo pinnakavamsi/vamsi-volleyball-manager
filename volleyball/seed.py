@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+import re
 
 from flask import current_app, g
 from sqlalchemy import select, text
@@ -23,12 +24,20 @@ def seed_demo(db, email, password):
     """Create only named demo organizations in a separately identified database."""
     email, password = normalize_email(email), validate_password(password)
     database_name = db.bind.url.database or ""
-    if "demo" not in database_name.casefold() and not current_app.config.get("ALLOW_DEMO_SEED", False):
-        raise APIError("Demo seeding requires a database with 'demo' in its name or explicit ALLOW_DEMO_SEED=true.")
+    if current_app.config.get('APP_ENV') not in ('development', 'test'):
+        raise APIError('Demo fixtures are unavailable in production.', 403)
+    if not re.search(r'(?:^|_)(?:demo|test)(?:_|$)', database_name.casefold()):
+        raise APIError("Demo fixtures require a separate database with a 'demo' or 'test' name segment.")
+    if not current_app.config.get('ALLOW_DEMO_SEED', False):
+        raise APIError('Explicit demo fixture opt-in is required.')
+    if not email.rsplit('@', 1)[1].endswith(('.test', '.invalid')):
+        raise APIError('Demo fixtures require a synthetic email ending in .test or .invalid.')
     if db.scalar(select(Organization).where(Organization.demo.is_(False))):
         raise APIError("Demo data cannot be added to a database containing a production organization.", 409)
     if db.scalar(select(Organization).where(Organization.slug == "hudson-demo")):
         raise APIError("Demo fixtures already exist. Keep the existing data or recreate the isolated demo database.", 409)
+    if db.scalar(select(User.id).limit(1)):
+        raise APIError('Demo fixtures require an empty isolated database; existing identities were preserved.', 409)
     user = db.scalar(select(User).where(User.email == email))
     if not user:
         user = User(email=email, name="Demo organizer", active=True,
