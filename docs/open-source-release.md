@@ -15,7 +15,7 @@ Configuration examples contain placeholders. Infrastructure credentials are gene
 - Blank desktop and 390-pixel mobile setup screens were inspected. All account fields were empty, and the mobile page had no horizontal overflow. See [screenshots](screenshots.md).
 - Source and wheel packages built successfully. The wheel includes the application assets, fonts, and required license notices. The source distribution includes migrations, scripts, tests, documentation, and screenshots; neither package includes private runtime files.
 - Markdown links, Python and shell syntax, and CI YAML checks passed. The CI workflow runs the PostgreSQL tests and builds a container without deploying to a server.
-- Hosted CI and Docker image execution were not run locally because a Docker daemon was unavailable. Physical-phone, provider, production recovery, and capacity checks remain recorded separately in the [release checklist](release-checklist.md).
+- After publication, [hosted CI for release 0c14a5b](https://github.com/pinnakavamsi/vamsi-volleyball-manager/actions/runs/38164157086) passed the complete PostgreSQL test job and container build/validation job. A local Docker daemon was unavailable, so local image execution was not checked. Physical-phone, provider, production recovery, and capacity checks remain recorded separately in the [release checklist](release-checklist.md).
 
 ## Repository and deployment privacy
 
